@@ -229,41 +229,214 @@ class HealthCheck(BaseModel):
     services: Dict[str, str]  # service_name -> status
 
 # ==========================================
-# OUTREACH CAMPAIGN MODELS
+# OUTREACH CAMPAIGN MODELS (NUEVOS)
 # ==========================================
 
+class OutreachCampaignCreate(BaseModel):
+    """Modelo para crear campaña de outreach"""
+    name: str = Field(..., min_length=1, max_length=200)
+    message_template: str = Field(..., min_length=1)
+    project_id: UUID
+    linkedin_account_id: Optional[str] = None
+    daily_limit: int = Field(default=80, ge=1, le=200)
+    delay_between_sends: int = Field(default=120, ge=30, le=3600)  # 30 segundos a 1 hora
+    send_schedule: Optional[Dict[str, Any]] = None
+
 class OutreachCampaign(BaseModel):
+    """Modelo completo de campaña de outreach"""
     id: UUID
-    project_id: Optional[UUID] = None
+    user_id: UUID
+    project_id: UUID
+    linkedin_account_id: Optional[str] = None
     name: str
-    message_template: Optional[str] = None
-    status: str
+    message_template: str
+    status: str = "draft"  # draft, active, paused, completed, error
+    
+    # Contadores
     total_targets: int = 0
     sent_count: int = 0
     reply_count: int = 0
+    accepted_count: int = 0
+    error_count: int = 0
+    
+    # Configuración
+    daily_limit: int = 80
+    delay_between_sends: int = 120
+    send_schedule: Optional[Dict[str, Any]] = None
+    
+    # Métricas
+    open_rate: float = 0.00
+    response_rate: float = 0.00
+    conversion_rate: float = 0.00
+    
+    # Timestamps
     created_at: datetime
     launched_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    last_processed: Optional[datetime] = None
+
+class OutreachTargetCreate(BaseModel):
+    """Modelo para crear target de outreach"""
+    campaign_id: UUID
+    investor_id: Optional[UUID] = None
+    linkedin_provider_id: Optional[str] = None
+    linkedin_profile_url: Optional[str] = None
+    linkedin_name: Optional[str] = None
+    personalized_message: str
+    relevance_score: Optional[float] = None
+    scheduled_for: Optional[datetime] = None
 
 class OutreachTarget(BaseModel):
+    """Modelo completo de target de outreach"""
     id: UUID
     campaign_id: UUID
-    investor_id: Optional[UUID] = None  # Puede ser business angel o empleado
-    personalized_message: Optional[str] = None
-    status: str
+    investor_id: Optional[UUID] = None
+    
+    # LinkedIn específico
+    linkedin_provider_id: Optional[str] = None
+    linkedin_profile_url: Optional[str] = None
+    linkedin_name: Optional[str] = None
+    
+    # Mensaje
+    personalized_message: str
+    message_character_count: Optional[int] = None
+    
+    # Estado
+    status: str = "pending"  # pending, sent, replied, accepted, failed, skipped
+    
+    # Timestamps
+    created_at: datetime
+    scheduled_for: Optional[datetime] = None
     sent_at: Optional[datetime] = None
     replied_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    
+    # Gestión de errores
     failure_reason: Optional[str] = None
     retry_count: int = 0
     last_retry_at: Optional[datetime] = None
-    created_at: datetime
+    max_retries: int = 3
+    
+    # Datos adicionales
+    profile_data: Optional[Dict[str, Any]] = None
+    relevance_score: Optional[float] = None
+    
+    # Tracking de interacciones
+    invitation_sent: bool = False
+    invitation_accepted: bool = False
+    message_sent: bool = False
+    profile_viewed: bool = False
 
 class LinkedInResponse(BaseModel):
+    """Modelo completo de respuesta de LinkedIn"""
     id: UUID
     outreach_target_id: UUID
+    campaign_id: UUID
+    
+    # Contenido
     response_text: str
-    response_sentiment: Optional[str] = None
-    interest_level: Optional[str] = None
+    response_type: str = "message"  # message, invitation_note, comment
+    
+    # Análisis de IA
+    response_sentiment: Optional[str] = None  # positive, negative, neutral
+    interest_level: Optional[str] = None  # high, medium, low
     next_action_suggested: Optional[str] = None
     ai_analysis: Optional[Dict[str, Any]] = None
+    
+    # Datos de Unipile
     unipile_event_data: Optional[Dict[str, Any]] = None
+    unipile_message_id: Optional[str] = None
+    unipile_chat_id: Optional[str] = None
+    
+    # Follow-up
+    follow_up_scheduled: bool = False
+    follow_up_sent: bool = False
+    follow_up_at: Optional[datetime] = None
+    
+    # Timestamps
     received_at: datetime
+    processed_at: Optional[datetime] = None
+    created_at: datetime
+
+class LinkedInAccountCreate(BaseModel):
+    """Modelo para crear cuenta de LinkedIn"""
+    unipile_account_id: str
+    account_type: str = "classic"  # classic, sales_navigator, recruiter
+    account_name: Optional[str] = None
+    account_email: Optional[str] = None
+
+class LinkedInAccount(BaseModel):
+    """Modelo completo de cuenta de LinkedIn"""
+    id: UUID
+    user_id: UUID
+    unipile_account_id: str
+    account_type: str = "classic"
+    status: str = "connected"  # connected, disconnected, error, credentials
+    account_name: Optional[str] = None
+    account_email: Optional[str] = None
+    last_sync: Optional[datetime] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+# ==========================================
+# RESPONSE MODELS PARA API
+# ==========================================
+
+class CampaignStats(BaseModel):
+    """Estadísticas de campaña"""
+    total_targets: int
+    sent_count: int
+    reply_count: int
+    accepted_count: int
+    failed_count: int
+    pending_count: int
+    response_rate: float
+    acceptance_rate: float
+
+class CampaignSummary(BaseModel):
+    """Resumen de campaña para dashboard"""
+    id: UUID
+    name: str
+    status: str
+    stats: CampaignStats
+    created_at: datetime
+    launched_at: Optional[datetime] = None
+    project_name: Optional[str] = None
+
+class OutreachProgress(BaseModel):
+    """Progreso de outreach en tiempo real"""
+    campaign_id: UUID
+    status: str  # "starting", "processing", "paused", "completed", "error"
+    progress_percentage: float
+    current_target: Optional[str] = None
+    targets_processed: int
+    targets_remaining: int
+    estimated_completion: Optional[datetime] = None
+    last_update: datetime
+
+class BulkTargetCreate(BaseModel):
+    """Crear múltiples targets en bulk"""
+    campaign_id: UUID
+    targets: List[OutreachTargetCreate]
+
+class BulkTargetResponse(BaseModel):
+    """Respuesta de creación bulk"""
+    success_count: int
+    error_count: int
+    created_targets: List[UUID]
+    errors: List[Dict[str, Any]]
+
+class UnipileWebhookEvent(BaseModel):
+    """Modelo para eventos de webhook de Unipile"""
+    id: UUID
+    event_type: str
+    unipile_account_id: Optional[str] = None
+    payload: Dict[str, Any]
+    processed: bool = False
+    processing_error: Optional[str] = None
+    received_at: datetime
+    processed_at: Optional[datetime] = None
+    campaign_id: Optional[UUID] = None
+    target_id: Optional[UUID] = None
