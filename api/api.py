@@ -23,6 +23,11 @@ from chat.welcome import welcome_system
 from chat.judge import judge
 from chat.librarian import librarian
 
+# Imports routers
+from api.linkedin import router as linkedin_router
+from api.outreach import router as outreach_router
+from api.webhooks import router as webhooks_router
+
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -481,6 +486,11 @@ async def shutdown_event():
     for client_id in list(ws_manager.active_connections.keys()):
         ws_manager.disconnect(client_id)
 
+# Al final de la configuración de FastAPI, después de app = FastAPI(...)
+app.include_router(linkedin_router, prefix="/api/v1")
+app.include_router(outreach_router, prefix="/api/v1")
+app.include_router(webhooks_router, prefix="/api/v1")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
@@ -489,3 +499,4 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", 8000)),
         reload=os.getenv("DEBUG", "False").lower() == "true"
     )
+
