@@ -6,7 +6,8 @@ from datetime import datetime
 from supabase import create_client, Client
 from models.schemas import (
     Project, ProjectCreate, ProjectData, ChatResponse, 
-    InvestorResult, CompanyResult, UserProfile, ChatConversation
+    InvestorResult, CompanyResult, UserProfile, ChatConversation,
+    OutreachCampaign, OutreachTarget, LinkedInAccount, LinkedInResponse
 )
 import logging
 
@@ -261,6 +262,236 @@ class Database:
             return []
     
     # ==========================================
+    # INVESTOR OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def get_investors_by_ids(self, investor_ids: List[UUID]) -> List[Dict[str, Any]]:
+        """Obtener inversores por sus IDs"""
+        try:
+            str_ids = [str(id) for id in investor_ids]
+            result = self.supabase.table("investors").select("*").in_("id", str_ids).execute()
+            return result.data
+        except Exception as e:
+            logger.error(f"Error getting investors by IDs: {e}")
+            return []
+    
+    async def get_investor(self, investor_id: UUID) -> Optional[Dict[str, Any]]:
+        """Obtener un inversor por ID"""
+        try:
+            result = self.supabase.table("investors").select("*").eq("id", str(investor_id)).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting investor: {e}")
+            return None
+    
+    # ==========================================
+    # LINKEDIN ACCOUNT OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def create_linkedin_account(self, user_id: UUID, account_data: Dict[str, Any]) -> bool:
+        """Crear cuenta de LinkedIn"""
+        try:
+            linkedin_data = {
+                "id": str(uuid4()),
+                "user_id": str(user_id),
+                "unipile_account_id": account_data["unipile_account_id"],
+                "account_type": account_data.get("account_type", "classic"),
+                "status": account_data.get("status", "connected"),
+                "account_name": account_data.get("account_name"),
+                "account_email": account_data.get("account_email"),
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            result = self.supabase.table("linkedin_accounts").insert(linkedin_data).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error creating LinkedIn account: {e}")
+            return False
+    
+    async def get_user_linkedin_accounts(self, user_id: UUID) -> List[Dict[str, Any]]:
+        """Obtener cuentas de LinkedIn del usuario"""
+        try:
+            result = self.supabase.table("linkedin_accounts").select("*").eq("user_id", str(user_id)).execute()
+            return result.data
+        except Exception as e:
+            logger.error(f"Error getting LinkedIn accounts: {e}")
+            return []
+    
+    async def get_linkedin_account(self, unipile_account_id: str) -> Optional[Dict[str, Any]]:
+        """Obtener cuenta de LinkedIn por ID de Unipile"""
+        try:
+            result = self.supabase.table("linkedin_accounts").select("*").eq("unipile_account_id", unipile_account_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting LinkedIn account: {e}")
+            return None
+    
+    async def update_linkedin_account_status(self, unipile_account_id: str, status: str, error_message: str = None) -> bool:
+        """Actualizar estado de cuenta de LinkedIn"""
+        try:
+            update_data = {
+                "status": status,
+                "updated_at": datetime.now().isoformat()
+            }
+            if error_message:
+                update_data["error_message"] = error_message
+            
+            result = self.supabase.table("linkedin_accounts").update(update_data).eq("unipile_account_id", unipile_account_id).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating LinkedIn account status: {e}")
+            return False
+    
+    # ==========================================
+    # CAMPAIGN OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def get_user_campaigns(self, user_id: UUID) -> List[Dict[str, Any]]:
+        """Obtener campañas del usuario"""
+        try:
+            result = self.supabase.table("outreach_campaigns").select("*").eq("user_id", str(user_id)).order("created_at", desc=True).execute()
+            return result.data
+        except Exception as e:
+            logger.error(f"Error getting user campaigns: {e}")
+            return []
+    
+    async def get_campaign(self, campaign_id: UUID, user_id: UUID) -> Optional[Dict[str, Any]]:
+        """Obtener campaña específica"""
+        try:
+            result = self.supabase.table("outreach_campaigns").select("*").eq("id", str(campaign_id)).eq("user_id", str(user_id)).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting campaign: {e}")
+            return None
+    
+    async def update_campaign(self, campaign_id: UUID, updates: Dict[str, Any]) -> bool:
+        """Actualizar campaña"""
+        try:
+            updates["updated_at"] = datetime.now().isoformat()
+            result = self.supabase.table("outreach_campaigns").update(updates).eq("id", str(campaign_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating campaign: {e}")
+            return False
+    
+    async def delete_campaign(self, campaign_id: UUID) -> bool:
+        """Eliminar campaña"""
+        try:
+            # Primero eliminar targets
+            self.supabase.table("outreach_targets").delete().eq("campaign_id", str(campaign_id)).execute()
+            
+            # Luego eliminar campaña
+            result = self.supabase.table("outreach_campaigns").delete().eq("id", str(campaign_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error deleting campaign: {e}")
+            return False
+    
+    # ==========================================
+    # TARGET OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def get_campaign_targets(self, campaign_id: UUID) -> List[Dict[str, Any]]:
+        """Obtener targets de una campaña"""
+        try:
+            result = self.supabase.table("outreach_targets").select("*").eq("campaign_id", str(campaign_id)).execute()
+            return result.data
+        except Exception as e:
+            logger.error(f"Error getting campaign targets: {e}")
+            return []
+    
+    async def remove_campaign_target(self, target_id: UUID) -> bool:
+        """Remover target de campaña"""
+        try:
+            result = self.supabase.table("outreach_targets").delete().eq("id", str(target_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error removing campaign target: {e}")
+            return False
+    
+    # ==========================================
+    # RESPONSE OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def save_linkedin_response(self, response_data: Dict[str, Any]) -> bool:
+        """Guardar respuesta de LinkedIn"""
+        try:
+            response_dict = {
+                "id": str(uuid4()),
+                "outreach_target_id": response_data["outreach_target_id"],
+                "campaign_id": response_data["campaign_id"],
+                "response_text": response_data["response_text"],
+                "response_type": response_data.get("response_type", "message"),
+                "unipile_event_data": response_data.get("unipile_event_data"),
+                "unipile_message_id": response_data.get("unipile_message_id"),
+                "unipile_chat_id": response_data.get("unipile_chat_id"),
+                "received_at": response_data.get("received_at", datetime.now().isoformat()),
+                "created_at": datetime.now().isoformat()
+            }
+            
+            result = self.supabase.table("linkedin_responses").insert(response_dict).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error saving LinkedIn response: {e}")
+            return False
+    
+    async def update_response_analysis(self, response_id: UUID, analysis: Dict[str, Any]) -> bool:
+        """Actualizar análisis de respuesta"""
+        try:
+            update_data = {
+                "response_sentiment": analysis.get("sentiment"),
+                "interest_level": analysis.get("interest_level"),
+                "next_action_suggested": analysis.get("next_action"),
+                "ai_analysis": analysis,
+                "processed_at": datetime.now().isoformat()
+            }
+            
+            result = self.supabase.table("linkedin_responses").update(update_data).eq("id", str(response_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating response analysis: {e}")
+            return False
+    
+    # ==========================================
+    # STATISTICS OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def get_user_campaign_stats(self, user_id: UUID) -> Dict[str, Any]:
+        """Obtener estadísticas de campañas del usuario"""
+        try:
+            # Obtener campañas
+            campaigns_result = self.supabase.table("outreach_campaigns").select("*").eq("user_id", str(user_id)).execute()
+            campaigns = campaigns_result.data
+            
+            # Calcular estadísticas
+            total_campaigns = len(campaigns)
+            active_campaigns = len([c for c in campaigns if c["status"] == "active"])
+            total_sent = sum(c.get("sent_count", 0) for c in campaigns)
+            total_replies = sum(c.get("reply_count", 0) for c in campaigns)
+            
+            average_response_rate = 0.0
+            if total_sent > 0:
+                average_response_rate = round((total_replies / total_sent) * 100, 2)
+            
+            return {
+                "total_campaigns": total_campaigns,
+                "active_campaigns": active_campaigns,
+                "total_sent": total_sent,
+                "total_replies": total_replies,
+                "average_response_rate": average_response_rate
+            }
+        except Exception as e:
+            logger.error(f"Error getting campaign stats: {e}")
+            return {
+                "total_campaigns": 0,
+                "active_campaigns": 0,
+                "total_sent": 0,
+                "total_replies": 0,
+                "average_response_rate": 0.0
+            }
+    
+    # ==========================================
     # USER OPERATIONS
     # ==========================================
     
@@ -283,6 +514,48 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting user profile: {e}")
             return None
+    
+    # ==========================================
+    # WEBHOOK OPERATIONS (NUEVAS)
+    # ==========================================
+    
+    async def save_webhook_event(self, event_data: Dict[str, Any]) -> UUID:
+        """Guardar evento de webhook"""
+        try:
+            event_id = uuid4()
+            webhook_data = {
+                "id": str(event_id),
+                "event_type": event_data["event_type"],
+                "unipile_account_id": event_data.get("unipile_account_id"),
+                "payload": event_data["payload"],
+                "processed": False,
+                "received_at": datetime.now().isoformat()
+            }
+            
+            result = self.supabase.table("unipile_webhook_events").insert(webhook_data).execute()
+            if result.data:
+                return event_id
+            else:
+                raise Exception("Failed to save webhook event")
+        except Exception as e:
+            logger.error(f"Error saving webhook event: {e}")
+            raise
+    
+    async def mark_webhook_processed(self, event_id: UUID, success: bool = True, error_message: str = None) -> bool:
+        """Marcar evento de webhook como procesado"""
+        try:
+            update_data = {
+                "processed": True,
+                "processed_at": datetime.now().isoformat()
+            }
+            if not success:
+                update_data["processing_error"] = error_message
+            
+            result = self.supabase.table("unipile_webhook_events").update(update_data).eq("id", str(event_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error marking webhook as processed: {e}")
+            return False
     
     # ==========================================
     # HELPER METHODS
