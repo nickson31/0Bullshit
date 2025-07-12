@@ -9,16 +9,20 @@ logger = logging.getLogger(__name__)
 
 class MessagePersonalizer:
     def __init__(self):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            generation_config={
-                "temperature": 0.6,
-                "top_p": 0.9,
-                "top_k": 40,
-                "max_output_tokens": 400,
-            }
-        )
+        try:
+            genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+            self.model = genai.GenerativeModel(
+                model_name="gemini-2.0-flash",
+                generation_config={
+                    "temperature": 0.6,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 400,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error initializing Gemini model: {e}")
+            self.model = None
     
     async def personalize_message(
         self, 
@@ -28,6 +32,10 @@ class MessagePersonalizer:
     ) -> str:
         """Personalizar mensaje usando IA"""
         try:
+            if not self.model:
+                # Fallback simple si Gemini no está disponible
+                return self._simple_personalization(template, investor_data, startup_data)
+            
             # Preparar contexto
             context = {
                 "investor": {
@@ -66,7 +74,7 @@ class MessagePersonalizer:
             4. Mantén el tono profesional pero personal
             5. Máximo 300 caracteres para LinkedIn (límite de invitaciones)
             6. Incluye un call-to-action claro
-            7. NO uses placeholders como {{name}} - reemplaza con datos reales
+            7. NO uses placeholders como {{{{name}}}} - reemplaza con datos reales
 
             PRINCIPIOS DE PERSONALIZACIÓN:
             - Si el inversor tiene experiencia en el sector de la startup, mencionarlo
@@ -89,11 +97,36 @@ class MessagePersonalizer:
         except Exception as e:
             logger.error(f"Error personalizing message: {e}")
             # Fallback: template básico con nombre
-            return template.replace("{{name}}", investor_data.get("full_name", ""))
+            return self._simple_personalization(template, investor_data, startup_data)
+    
+    def _simple_personalization(self, template: str, investor_data: Dict[str, Any], startup_data: Dict[str, Any]) -> str:
+        """Personalización simple sin IA"""
+        message = template
+        
+        # Reemplazos básicos
+        replacements = {
+            "{{name}}": investor_data.get("full_name", ""),
+            "{{fund}}": investor_data.get("fund_name", ""),
+            "{{startup_name}}": startup_data.get("name", ""),
+            "{{stage}}": startup_data.get("stage", ""),
+            "{{sector}}": ", ".join(startup_data.get("categories", [])) or "tech"
+        }
+        
+        for placeholder, value in replacements.items():
+            message = message.replace(placeholder, value)
+        
+        # Truncar si es muy largo
+        if len(message) > 300:
+            message = message[:280] + "..."
+        
+        return message
     
     async def _shorten_message(self, message: str) -> str:
         """Acortar mensaje manteniendo personalización"""
         try:
+            if not self.model:
+                return message[:280] + "..."
+            
             prompt = f"""
             Acorta este mensaje de LinkedIn manteniendo la personalización clave:
             
@@ -132,6 +165,9 @@ class MessagePersonalizer:
     ) -> str:
         """Generar follow-up inteligente basado en respuesta"""
         try:
+            if not self.model:
+                return "Gracias por tu respuesta. ¿Te gustaría agendar una breve llamada para discutir nuestra startup?"
+            
             prompt = f"""
             GENERA UN FOLLOW-UP INTELIGENTE PARA ESTA CONVERSACIÓN DE LINKEDIN.
 
@@ -167,6 +203,14 @@ class MessagePersonalizer:
     async def analyze_response_sentiment(self, response_text: str) -> Dict[str, Any]:
         """Analizar sentimiento e intención de respuesta"""
         try:
+            if not self.model:
+                return {
+                    "sentiment": "neutral",
+                    "interest_level": "medium", 
+                    "next_action": "follow_up_later",
+                    "reasoning": "AI analysis not available"
+                }
+            
             prompt = f"""
             ANALIZA EL SENTIMIENTO E INTENCIÓN DE ESTA RESPUESTA DE LINKEDIN.
 
@@ -196,6 +240,10 @@ class MessagePersonalizer:
                 "reasoning": "Error in analysis"
             }
 
+# ==========================================
+# RATE LIMITER
+# ==========================================
+
 # campaigns/rate_limiter.py
 import asyncio
 from datetime import datetime, timedelta
@@ -206,7 +254,7 @@ logger = logging.getLogger(__name__)
 
 class LinkedInRateLimiter:
     def __init__(self):
-        # Track usage per account
+        # Track usage per account (en memoria, en producción usar Redis)
         self.usage_tracker = {}
     
     async def can_send_invitation(self, account_id: str) -> bool:
@@ -222,7 +270,12 @@ class LinkedInRateLimiter:
         DAILY_LIMIT = 80  # 80-100 por día
         WEEKLY_LIMIT = 200  # 200 por semana máximo
         
-        return daily_sent < DAILY_LIMIT and weekly_sent < WEEKLY_LIMIT
+        can_send = daily_sent < DAILY_LIMIT and weekly_sent < WEEKLY_LIMIT
+        
+        if not can_send:
+            logger.warning(f"Rate limit reached for account {account_id}: daily={daily_sent}/{DAILY_LIMIT}, weekly={weekly_sent}/{WEEKLY_LIMIT}")
+        
+        return can_send
     
     async def can_search_profiles(self, account_id: str) -> bool:
         """Verificar si puede hacer búsquedas de perfiles"""
@@ -235,6 +288,7 @@ class LinkedInRateLimiter:
     async def record_invitation_sent(self, account_id: str):
         """Registrar invitación enviada"""
         await self._record_action(account_id, "invitation", datetime.now())
+        logger.debug(f"Recorded invitation sent for account {account_id}")
     
     async def record_search_performed(self, account_id: str):
         """Registrar búsqueda realizada"""
@@ -251,17 +305,22 @@ class LinkedInRateLimiter:
     
     async def _get_daily_invitations(self, account_id: str, date) -> int:
         """Obtener invitaciones enviadas hoy"""
-        # Query a la base de datos
         from database.database import db
         
+        start_date = date.isoformat()
+        end_date = (date + timedelta(days=1)).isoformat()
+        
+        # Buscar en outreach_targets donde se enviaron invitaciones hoy
         result = db.supabase.table("outreach_targets").select("id").eq(
-            "linkedin_account_id", account_id
-        ).eq("status", "sent").gte(
-            "sent_at", date.isoformat()
+            "status", "sent"
+        ).gte(
+            "sent_at", start_date
         ).lt(
-            "sent_at", (date + timedelta(days=1)).isoformat()
+            "sent_at", end_date
         ).execute()
         
+        # Filtrar por cuenta de LinkedIn si tenemos esa información
+        # Por ahora retornar el total
         return len(result.data)
     
     async def _get_weekly_invitations(self, account_id: str, week_start) -> int:
@@ -271,8 +330,8 @@ class LinkedInRateLimiter:
         week_end = week_start + timedelta(days=7)
         
         result = db.supabase.table("outreach_targets").select("id").eq(
-            "linkedin_account_id", account_id
-        ).eq("status", "sent").gte(
+            "status", "sent"
+        ).gte(
             "sent_at", week_start.isoformat()
         ).lt(
             "sent_at", week_end.isoformat()
@@ -294,8 +353,9 @@ class LinkedInRateLimiter:
     
     async def _record_action(self, account_id: str, action_type: str, timestamp: datetime):
         """Registrar acción para tracking"""
-        # Implementar logging de acciones si es necesario
-        pass
+        # En una implementación completa, esto iría a Redis o base de datos
+        # Por ahora solo logueamos
+        logger.debug(f"Action recorded: {action_type} for account {account_id} at {timestamp}")
 
 # Instancias globales
 message_personalizer = MessagePersonalizer()
