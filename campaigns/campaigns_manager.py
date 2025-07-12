@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class CampaignManager:
     def __init__(self):
         self.active_campaigns = set()  # Track campaigns being processed
+        self.processing_lock = asyncio.Lock()
         
     async def create_campaign(
         self, 
@@ -24,7 +25,7 @@ class CampaignManager:
         name: str, 
         message_template: str,
         linkedin_account_id: str,
-        target_investor_ids: List[UUID]
+        target_investor_ids: List[UUID] = None
     ) -> Dict[str, Any]:
         """Crear nueva campaña de outreach"""
         try:
@@ -42,7 +43,15 @@ class CampaignManager:
                 "total_targets": 0,
                 "sent_count": 0,
                 "reply_count": 0,
-                "created_at": datetime.now().isoformat()
+                "accepted_count": 0,
+                "error_count": 0,
+                "daily_limit": 80,
+                "delay_between_sends": 120,
+                "open_rate": 0.0,
+                "response_rate": 0.0,
+                "conversion_rate": 0.0,
+                "created_at": datetime.now().isoformat(),
+                "last_processed": None
             }
             
             result = db.supabase.table("outreach_campaigns").insert(campaign_data).execute()
@@ -74,23 +83,43 @@ class CampaignManager:
             
             targets = []
             for investor in investors:
-                # Personalizar mensaje para cada inversor
-                personalized_message = await message_personalizer.personalize_message(
-                    template=message_template,
-                    investor_data=investor,
-                    startup_data=project
-                )
-                
-                target_data = {
-                    "id": str(uuid4()),
-                    "campaign_id": str(campaign_id),
-                    "investor_id": str(investor["id"]),
-                    "linkedin_provider_id": investor.get("linkedin_provider_id"),
-                    "personalized_message": personalized_message,
-                    "status": "pending",
-                    "created_at": datetime.now().isoformat()
-                }
-                targets.append(target_data)
+                try:
+                    # Personalizar mensaje para cada inversor
+                    personalized_message = await message_personalizer.personalize_message(
+                        template=message_template,
+                        investor_data=investor,
+                        startup_data=project
+                    )
+                    
+                    target_data = {
+                        "id": str(uuid4()),
+                        "campaign_id": str(campaign_id),
+                        "investor_id": str(investor["id"]),
+                        "linkedin_provider_id": investor.get("linkedin_provider_id"),
+                        "linkedin_profile_url": investor.get("linkedin_url"),
+                        "linkedin_name": investor.get("full_name"),
+                        "personalized_message": personalized_message,
+                        "message_character_count": len(personalized_message),
+                        "status": "pending",
+                        "created_at": datetime.now().isoformat(),
+                        "retry_count": 0,
+                        "max_retries": 3,
+                        "profile_data": {
+                            "headline": investor.get("headline"),
+                            "company": investor.get("company_name"),
+                            "fund": investor.get("fund_name")
+                        },
+                        "relevance_score": investor.get("relevance_score", 0.5),
+                        "invitation_sent": False,
+                        "invitation_accepted": False,
+                        "message_sent": False,
+                        "profile_viewed": False
+                    }
+                    targets.append(target_data)
+                    
+                except Exception as e:
+                    logger.error(f"Error preparing target for investor {investor.get('id')}: {e}")
+                    continue
             
             # Insertar en batch
             if targets:
@@ -101,6 +130,7 @@ class CampaignManager:
                     "total_targets": len(targets)
                 }).eq("id", str(campaign_id)).execute()
                 
+                logger.info(f"Added {len(targets)} targets to campaign {campaign_id}")
                 return result.data
             
             return []
@@ -112,6 +142,11 @@ class CampaignManager:
     async def launch_campaign(self, campaign_id: UUID):
         """Lanzar campaña - cambiar estado y programar envíos"""
         try:
+            # Verificar que la campaña tenga targets
+            targets = await self._get_pending_targets(campaign_id)
+            if not targets:
+                raise Exception("Campaign has no targets to process")
+            
             # Cambiar estado a activo
             update_data = {
                 "status": "active",
@@ -123,7 +158,7 @@ class CampaignManager:
             if not result.data:
                 raise Exception("Failed to launch campaign")
             
-            logger.info(f"Campaign {campaign_id} launched successfully")
+            logger.info(f"Campaign {campaign_id} launched successfully with {len(targets)} targets")
             
         except Exception as e:
             logger.error(f"Error launching campaign: {e}")
@@ -131,11 +166,12 @@ class CampaignManager:
     
     async def process_campaign_sends(self, campaign_id: UUID):
         """Procesar envíos de campaña en background"""
-        if campaign_id in self.active_campaigns:
-            logger.info(f"Campaign {campaign_id} already being processed")
-            return
-        
-        self.active_campaigns.add(campaign_id)
+        async with self.processing_lock:
+            if campaign_id in self.active_campaigns:
+                logger.info(f"Campaign {campaign_id} already being processed")
+                return
+            
+            self.active_campaigns.add(campaign_id)
         
         try:
             logger.info(f"Starting campaign processing for {campaign_id}")
@@ -148,9 +184,18 @@ class CampaignManager:
             
             # Obtener account de LinkedIn
             linkedin_account_id = campaign["linkedin_account_id"]
+            if not linkedin_account_id:
+                logger.error(f"Campaign {campaign_id} has no LinkedIn account configured")
+                return
             
-            # Obtener targets pendientes
-            pending_targets = await self._get_pending_targets(campaign_id)
+            # Verificar que Unipile esté configurado
+            if not unipile_client:
+                logger.error("Unipile client not configured - cannot process outreach")
+                return
+            
+            # Obtener targets pendientes (procesar en lotes)
+            batch_size = campaign.get("daily_limit", 80)
+            pending_targets = await self._get_pending_targets(campaign_id, limit=batch_size)
             
             if not pending_targets:
                 # Marcar campaña como completada
@@ -160,19 +205,20 @@ class CampaignManager:
             logger.info(f"Processing {len(pending_targets)} pending targets for campaign {campaign_id}")
             
             # Procesar targets respetando rate limits
+            processed = 0
             for target in pending_targets:
                 try:
                     # Verificar si campaña sigue activa
-                    campaign = await self._get_campaign(campaign_id)
-                    if campaign["status"] != "active":
+                    campaign_check = await self._get_campaign(campaign_id)
+                    if campaign_check["status"] != "active":
                         logger.info(f"Campaign {campaign_id} paused/stopped, halting processing")
                         break
                     
                     # Verificar rate limits de LinkedIn
                     if not await linkedin_rate_limiter.can_send_invitation(linkedin_account_id):
                         logger.info(f"Rate limit reached for account {linkedin_account_id}, scheduling retry")
-                        await self._schedule_retry(campaign_id, target["id"])
-                        continue
+                        await self._schedule_retry_later(campaign_id)
+                        break
                     
                     # Enviar mensaje/invitación
                     success = await self._send_outreach_message(
@@ -183,13 +229,20 @@ class CampaignManager:
                     if success:
                         await self._mark_target_sent(target["id"])
                         await self._increment_sent_count(campaign_id)
+                        processed += 1
                         logger.info(f"Successfully sent message to target {target['id']}")
                     else:
                         await self._mark_target_failed(target["id"], "Send failed")
                         logger.warning(f"Failed to send message to target {target['id']}")
                     
+                    # Registrar envío para rate limiting
+                    await linkedin_rate_limiter.record_invitation_sent(linkedin_account_id)
+                    
                     # Espera random entre envíos (humanizar comportamiento)
-                    wait_time = random.randint(30, 180)  # 30 segundos a 3 minutos
+                    delay = campaign.get("delay_between_sends", 120)
+                    wait_time = random.randint(int(delay * 0.8), int(delay * 1.2))
+                    
+                    logger.debug(f"Waiting {wait_time}s before next message")
                     await asyncio.sleep(wait_time)
                     
                 except Exception as e:
@@ -197,12 +250,17 @@ class CampaignManager:
                     await self._mark_target_failed(target["id"], str(e))
                     continue
             
+            # Actualizar última vez procesada
+            await db.supabase.table("outreach_campaigns").update({
+                "last_processed": datetime.now().isoformat()
+            }).eq("id", str(campaign_id)).execute()
+            
             # Verificar si quedan targets pendientes
             remaining_targets = await self._get_pending_targets(campaign_id)
             
             if remaining_targets:
-                # Programar siguiente batch para mañana
-                logger.info(f"Campaign {campaign_id} has {len(remaining_targets)} remaining targets, will continue tomorrow")
+                # Programar siguiente batch
+                logger.info(f"Campaign {campaign_id} has {len(remaining_targets)} remaining targets")
             else:
                 # Campaña completada
                 await self._complete_campaign(campaign_id)
@@ -210,19 +268,18 @@ class CampaignManager:
             
         except Exception as e:
             logger.error(f"Error processing campaign {campaign_id}: {e}")
+            # Marcar campaña como error
+            await db.supabase.table("outreach_campaigns").update({
+                "status": "error",
+                "last_processed": datetime.now().isoformat()
+            }).eq("id", str(campaign_id)).execute()
         finally:
-            self.active_campaigns.discard(campaign_id)
+            async with self.processing_lock:
+                self.active_campaigns.discard(campaign_id)
     
     async def _send_outreach_message(self, linkedin_account_id: str, target: Dict[str, Any]) -> bool:
         """Enviar mensaje de outreach individual"""
         try:
-            # Verificar si ya son conexiones o necesita invitación
-            investor_data = await db.get_investor(UUID(target["investor_id"]))
-            
-            if not investor_data:
-                logger.error(f"Investor {target['investor_id']} not found")
-                return False
-            
             linkedin_provider_id = target.get("linkedin_provider_id")
             if not linkedin_provider_id:
                 logger.error(f"No LinkedIn provider ID for target {target['id']}")
@@ -230,30 +287,82 @@ class CampaignManager:
             
             message = target["personalized_message"]
             
-            # Primero verificar si ya son conexiones
-            relations = await unipile_client.get_relations(linkedin_account_id, limit=1000)
-            is_connection = any(rel.get("provider_id") == linkedin_provider_id for rel in relations)
+            # Verificar si ya son conexiones
+            try:
+                relations = await unipile_client.get_relations(linkedin_account_id, limit=1000)
+                is_connection = any(rel.get("provider_id") == linkedin_provider_id for rel in relations)
+            except Exception as e:
+                logger.warning(f"Could not check relations: {e}")
+                is_connection = False
             
             if is_connection:
                 # Enviar mensaje directo
+                logger.info(f"Sending direct message to existing connection")
                 result = await unipile_client.send_message(
                     account_id=linkedin_account_id,
                     attendee_provider_id=linkedin_provider_id,
                     text=message
                 )
+                
+                # Marcar como mensaje enviado
+                await db.supabase.table("outreach_targets").update({
+                    "message_sent": True
+                }).eq("id", target["id"]).execute()
+                
             else:
                 # Enviar invitación
+                logger.info(f"Sending invitation to new contact")
                 result = await unipile_client.send_invitation(
                     account_id=linkedin_account_id,
                     provider_id=linkedin_provider_id,
                     message=message
                 )
+                
+                # Marcar como invitación enviada
+                await db.supabase.table("outreach_targets").update({
+                    "invitation_sent": True
+                }).eq("id", target["id"]).execute()
             
             return True
             
         except Exception as e:
             logger.error(f"Error sending outreach message: {e}")
             return False
+    
+    async def send_test_message(self, campaign_id: UUID, target_id: UUID) -> Dict[str, Any]:
+        """Enviar mensaje de prueba (solo en desarrollo)"""
+        try:
+            campaign = await self._get_campaign(campaign_id)
+            if not campaign:
+                raise Exception("Campaign not found")
+            
+            # Obtener target
+            target_result = db.supabase.table("outreach_targets").select("*").eq("id", str(target_id)).execute()
+            if not target_result.data:
+                raise Exception("Target not found")
+            
+            target = target_result.data[0]
+            
+            # Enviar mensaje de prueba
+            success = await self._send_outreach_message(
+                linkedin_account_id=campaign["linkedin_account_id"],
+                target=target
+            )
+            
+            return {
+                "success": success,
+                "target_id": str(target_id),
+                "message": "Test message sent" if success else "Test message failed",
+                "personalized_message": target["personalized_message"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error sending test message: {e}")
+            raise
+    
+    # ==========================================
+    # HELPER METHODS
+    # ==========================================
     
     async def _get_campaign(self, campaign_id: UUID) -> Optional[Dict[str, Any]]:
         """Obtener datos de campaña"""
@@ -269,9 +378,14 @@ class CampaignManager:
         project = await db.get_project(UUID(campaign["project_id"]), UUID(campaign["user_id"]))
         return project.dict() if project else {}
     
-    async def _get_pending_targets(self, campaign_id: UUID) -> List[Dict[str, Any]]:
+    async def _get_pending_targets(self, campaign_id: UUID, limit: int = None) -> List[Dict[str, Any]]:
         """Obtener targets pendientes de envío"""
-        result = db.supabase.table("outreach_targets").select("*").eq("campaign_id", str(campaign_id)).eq("status", "pending").execute()
+        query = db.supabase.table("outreach_targets").select("*").eq("campaign_id", str(campaign_id)).eq("status", "pending")
+        
+        if limit:
+            query = query.limit(limit)
+        
+        result = query.execute()
         return result.data
     
     async def _mark_target_sent(self, target_id: str):
@@ -284,11 +398,30 @@ class CampaignManager:
     
     async def _mark_target_failed(self, target_id: str, reason: str):
         """Marcar target como fallido"""
-        update_data = {
-            "status": "failed",
-            "failure_reason": reason
-        }
-        db.supabase.table("outreach_targets").update(update_data).eq("id", target_id).execute()
+        # Obtener retry count actual
+        target_result = db.supabase.table("outreach_targets").select("retry_count, max_retries").eq("id", target_id).execute()
+        
+        if target_result.data:
+            target = target_result.data[0]
+            retry_count = target.get("retry_count", 0)
+            max_retries = target.get("max_retries", 3)
+            
+            if retry_count < max_retries:
+                # Programar reintento
+                update_data = {
+                    "retry_count": retry_count + 1,
+                    "last_retry_at": datetime.now().isoformat(),
+                    "failure_reason": reason
+                }
+            else:
+                # Marcar como fallido permanentemente
+                update_data = {
+                    "status": "failed",
+                    "failure_reason": reason,
+                    "failed_at": datetime.now().isoformat()
+                }
+            
+            db.supabase.table("outreach_targets").update(update_data).eq("id", target_id).execute()
     
     async def _increment_sent_count(self, campaign_id: UUID):
         """Incrementar contador de enviados"""
@@ -307,12 +440,13 @@ class CampaignManager:
             "completed_at": datetime.now().isoformat()
         }
         db.supabase.table("outreach_campaigns").update(update_data).eq("id", str(campaign_id)).execute()
+        logger.info(f"Campaign {campaign_id} marked as completed")
     
-    async def _schedule_retry(self, campaign_id: UUID, target_id: str):
-        """Programar reintento para mañana"""
-        # Esto se puede mejorar con un sistema de colas como Celery
-        logger.info(f"Scheduling retry for target {target_id} tomorrow")
-        pass
+    async def _schedule_retry_later(self, campaign_id: UUID):
+        """Programar campaña para procesar más tarde"""
+        # En una implementación completa, usarías Celery o similar
+        # Por ahora, solo logueamos
+        logger.info(f"Campaign {campaign_id} scheduled for retry later due to rate limits")
     
     def _format_campaign_response(self, campaign_data: Dict[str, Any]) -> Dict[str, Any]:
         """Formatear respuesta de campaña"""
