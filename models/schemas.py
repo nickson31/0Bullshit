@@ -227,3 +227,43 @@ class HealthCheck(BaseModel):
     status: str
     timestamp: datetime
     services: Dict[str, str]  # service_name -> status
+
+# ==========================================
+# OUTREACH CAMPAIGN MODELS
+# ==========================================
+
+class OutreachCampaign(BaseModel):
+    id: UUID
+    project_id: Optional[UUID] = None
+    name: str
+    message_template: Optional[str] = None
+    status: str
+    total_targets: int = 0
+    sent_count: int = 0
+    reply_count: int = 0
+    created_at: datetime
+    launched_at: Optional[datetime] = None
+
+class OutreachTarget(BaseModel):
+    id: UUID
+    campaign_id: UUID
+    investor_id: Optional[UUID] = None  # Puede ser business angel o empleado
+    personalized_message: Optional[str] = None
+    status: str
+    sent_at: Optional[datetime] = None
+    replied_at: Optional[datetime] = None
+    failure_reason: Optional[str] = None
+    retry_count: int = 0
+    last_retry_at: Optional[datetime] = None
+    created_at: datetime
+
+class LinkedInResponse(BaseModel):
+    id: UUID
+    outreach_target_id: UUID
+    response_text: str
+    response_sentiment: Optional[str] = None
+    interest_level: Optional[str] = None
+    next_action_suggested: Optional[str] = None
+    ai_analysis: Optional[Dict[str, Any]] = None
+    unipile_event_data: Optional[Dict[str, Any]] = None
+    received_at: datetime
