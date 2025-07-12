@@ -23,10 +23,14 @@ from chat.welcome import welcome_system
 from chat.judge import judge
 from chat.librarian import librarian
 
-# Imports routers
+# Imports de utilidades
+from api.utils import get_current_user
+
+# Imports de routers
 from api.linkedin import router as linkedin_router
 from api.outreach import router as outreach_router
 from api.webhooks import router as webhooks_router
+from api.campaigns import router as campaigns_router
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -35,8 +39,10 @@ logger = logging.getLogger(__name__)
 # Inicializar FastAPI
 app = FastAPI(
     title="0Bullshit Chat API",
-    description="API para el sistema de chat con IA especializado en startups",
-    version="1.0.0"
+    description="API para el sistema de chat con IA especializado en startups con outreach automatizado",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # CORS
@@ -47,39 +53,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Seguridad JWT
-security = HTTPBearer()
-
-# ==========================================
-# UTILITIES Y MIDDLEWARE
-# ==========================================
-
-def decode_jwt_token(token: str) -> Dict[str, Any]:
-    """Decodificar JWT token"""
-    try:
-        payload = jwt.decode(
-            token, 
-            os.getenv("JWT_SECRET_KEY", "default-secret-key"), 
-            algorithms=[os.getenv("JWT_ALGORITHM", "HS256")]
-        )
-        return payload
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token"
-        )
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UUID:
-    """Obtener usuario actual del JWT"""
-    payload = decode_jwt_token(credentials.credentials)
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload"
-        )
-    return UUID(user_id)
 
 # ==========================================
 # WEBSOCKET MANAGER
@@ -118,22 +91,37 @@ async def health_check():
     
     # Check Supabase
     try:
-        # Simple query to test connection
         result = db.supabase.table("users").select("id").limit(1).execute()
         services["supabase"] = "healthy"
-    except Exception:
+    except Exception as e:
+        logger.error(f"Supabase health check failed: {e}")
         services["supabase"] = "unhealthy"
     
     # Check Gemini API
     try:
-        # Test with simple generation
         test_response = judge.model.generate_content("Test connection")
         services["gemini"] = "healthy" if test_response else "unhealthy"
-    except Exception:
+    except Exception as e:
+        logger.error(f"Gemini health check failed: {e}")
         services["gemini"] = "unhealthy"
     
+    # Check Unipile (if configured)
+    try:
+        from integrations.unipile_client import unipile_client
+        if unipile_client and unipile_client.api_key:
+            # Test simple API call
+            accounts = await unipile_client.get_accounts()
+            services["unipile"] = "healthy"
+        else:
+            services["unipile"] = "not_configured"
+    except Exception as e:
+        logger.error(f"Unipile health check failed: {e}")
+        services["unipile"] = "unhealthy"
+    
+    overall_status = "healthy" if all(s in ["healthy", "not_configured"] for s in services.values()) else "degraded"
+    
     return HealthCheck(
-        status="healthy" if all(s == "healthy" for s in services.values()) else "degraded",
+        status=overall_status,
         timestamp=datetime.now(),
         services=services
     )
@@ -150,6 +138,7 @@ async def create_project(
     """Crear nuevo proyecto"""
     try:
         project = await db.create_project(current_user, project_data)
+        logger.info(f"Project created: {project.id} by user {current_user}")
         return project
     except Exception as e:
         logger.error(f"Error creating project: {e}")
@@ -306,6 +295,59 @@ async def get_conversation_list(current_user: UUID = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Error getting conversation list")
 
 # ==========================================
+# LINKEDIN ACCOUNT ENDPOINTS
+# ==========================================
+
+@app.get("/api/v1/linkedin/accounts")
+async def get_linkedin_accounts(current_user: UUID = Depends(get_current_user)):
+    """Obtener cuentas de LinkedIn del usuario"""
+    try:
+        accounts = await db.get_user_linkedin_accounts(current_user)
+        return {
+            "success": True,
+            "accounts": accounts,
+            "total": len(accounts)
+        }
+    except Exception as e:
+        logger.error(f"Error getting LinkedIn accounts: {e}")
+        raise HTTPException(status_code=500, detail="Error getting LinkedIn accounts")
+
+@app.post("/api/v1/linkedin/connect")
+async def connect_linkedin_account(
+    success_url: str,
+    failure_url: str,
+    current_user: UUID = Depends(get_current_user)
+):
+    """Iniciar proceso de conexión de LinkedIn"""
+    try:
+        from integrations.unipile_client import unipile_client
+        
+        if not unipile_client:
+            raise HTTPException(status_code=503, detail="LinkedIn integration not available")
+        
+        # Crear webhook URL (deberías usar tu dominio real)
+        base_url = os.getenv("BASE_URL", "http://localhost:8000")
+        notify_url = f"{base_url}/api/v1/webhooks/linkedin/auth-success"
+        
+        # Crear link de autenticación
+        auth_data = await unipile_client.create_hosted_auth_link(
+            user_id=str(current_user),
+            success_url=success_url,
+            failure_url=failure_url,
+            notify_url=notify_url
+        )
+        
+        return {
+            "success": True,
+            "auth_url": auth_data["url"],
+            "message": "Please visit the auth_url to connect your LinkedIn account"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error connecting LinkedIn account: {e}")
+        raise HTTPException(status_code=500, detail="Error connecting LinkedIn account")
+
+# ==========================================
 # WEBSOCKET ENDPOINT
 # ==========================================
 
@@ -320,6 +362,7 @@ async def websocket_chat(websocket: WebSocket, project_id: UUID):
         return
     
     try:
+        from api.utils import decode_jwt_token
         user_payload = decode_jwt_token(token)
         user_id = UUID(user_payload.get("sub"))
     except Exception:
@@ -435,6 +478,32 @@ async def debug_judge_analysis(
         raise HTTPException(status_code=500, detail="Error in judge analysis")
 
 # ==========================================
+# FEATURE FLAGS ENDPOINT
+# ==========================================
+
+@app.get("/api/v1/features")
+async def get_feature_flags(current_user: UUID = Depends(get_current_user)):
+    """Obtener feature flags para el usuario"""
+    try:
+        from api.utils import is_feature_enabled
+        
+        features = {
+            "linkedin_outreach": is_feature_enabled("linkedin_outreach", current_user),
+            "ai_message_generation": is_feature_enabled("ai_message_generation", current_user),
+            "advanced_analytics": is_feature_enabled("advanced_analytics", current_user),
+            "auto_follow_up": is_feature_enabled("auto_follow_up", current_user)
+        }
+        
+        return {
+            "success": True,
+            "features": features
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting feature flags: {e}")
+        raise HTTPException(status_code=500, detail="Error getting feature flags")
+
+# ==========================================
 # ERROR HANDLERS
 # ==========================================
 
@@ -460,7 +529,7 @@ async def general_exception_handler(request, exc):
 @app.on_event("startup")
 async def startup_event():
     """Eventos de inicio"""
-    logger.info("0Bullshit Chat API starting up...")
+    logger.info("🚀 0Bullshit Chat API starting up...")
     
     # Verificar conexiones
     try:
@@ -476,20 +545,60 @@ async def startup_event():
         logger.info("✅ Gemini API connection OK")
     except Exception as e:
         logger.error(f"❌ Gemini API connection failed: {e}")
+    
+    try:
+        # Test Unipile (if configured)
+        from integrations.unipile_client import unipile_client
+        if unipile_client and unipile_client.api_key:
+            accounts = await unipile_client.get_accounts()
+            logger.info("✅ Unipile connection OK")
+        else:
+            logger.info("⚠️ Unipile not configured - LinkedIn features disabled")
+    except Exception as e:
+        logger.error(f"❌ Unipile connection failed: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Eventos de cierre"""
-    logger.info("0Bullshit Chat API shutting down...")
+    logger.info("🛑 0Bullshit Chat API shutting down...")
     
     # Cerrar conexiones WebSocket
     for client_id in list(ws_manager.active_connections.keys()):
         ws_manager.disconnect(client_id)
 
-# Al final de la configuración de FastAPI, después de app = FastAPI(...)
-app.include_router(linkedin_router, prefix="/api/v1")
-app.include_router(outreach_router, prefix="/api/v1")
-app.include_router(webhooks_router, prefix="/api/v1")
+# ==========================================
+# INCLUDE ROUTERS
+# ==========================================
+
+# Incluir todos los routers
+app.include_router(linkedin_router, prefix="/api/v1", tags=["LinkedIn"])
+app.include_router(outreach_router, prefix="/api/v1", tags=["Outreach"])
+app.include_router(webhooks_router, prefix="/api/v1", tags=["Webhooks"])
+app.include_router(campaigns_router, prefix="/api/v1", tags=["Campaigns"])
+
+# ==========================================
+# ROOT ENDPOINT
+# ==========================================
+
+@app.get("/")
+async def root():
+    """Endpoint raíz"""
+    return {
+        "name": "0Bullshit Chat API",
+        "version": "2.0.0",
+        "description": "API para el sistema de chat con IA especializado en startups con outreach automatizado",
+        "docs": "/docs",
+        "health": "/health",
+        "features": [
+            "AI Chat System",
+            "Investor Search",
+            "Company Search", 
+            "Y-Combinator Mentoring",
+            "LinkedIn Outreach",
+            "Campaign Management",
+            "Real-time Analytics"
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
@@ -499,4 +608,3 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", 8000)),
         reload=os.getenv("DEBUG", "False").lower() == "true"
     )
-
