@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 
 class UnipileClient:
     def __init__(self):
-        self.api_url = os.getenv("UNIPILE_API_URL")
+        self.api_url = os.getenv("UNIPILE_API_URL", "https://api2.unipile.com:13044/api/v1")
         self.api_key = os.getenv("UNIPILE_API_KEY")
         self.dsn = os.getenv("UNIPILE_DSN")
         
-        if not all([self.api_url, self.api_key, self.dsn]):
-            raise ValueError("Unipile credentials not properly configured")
+        if not self.api_key:
+            logger.warning("UNIPILE_API_KEY not configured - Unipile features disabled")
     
     def _get_headers(self) -> Dict[str, str]:
         """Headers estándar para requests a Unipile"""
@@ -25,12 +25,19 @@ class UnipileClient:
             "content-type": "application/json"
         }
     
+    def _check_config(self):
+        """Verificar que la configuración esté lista"""
+        if not self.api_key:
+            raise ValueError("Unipile API key not configured")
+    
     # ==========================================
     # GESTIÓN DE CUENTAS
     # ==========================================
     
     async def create_hosted_auth_link(self, user_id: str, success_url: str, failure_url: str, notify_url: str) -> Dict[str, Any]:
         """Crear link de autenticación hosteada para LinkedIn"""
+        self._check_config()
+        
         payload = {
             "type": "create",
             "providers": ["LINKEDIN"],
@@ -57,6 +64,8 @@ class UnipileClient:
     
     async def reconnect_account(self, account_id: str, user_id: str) -> Dict[str, Any]:
         """Reconectar cuenta desconectada"""
+        self._check_config()
+        
         payload = {
             "type": "reconnect",
             "providers": ["LINKEDIN"],
@@ -81,6 +90,8 @@ class UnipileClient:
     
     async def get_accounts(self) -> List[Dict[str, Any]]:
         """Obtener todas las cuentas conectadas"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/accounts",
@@ -95,6 +106,8 @@ class UnipileClient:
     
     async def get_account_status(self, account_id: str) -> Dict[str, Any]:
         """Verificar estado de cuenta específica"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/accounts/{account_id}",
@@ -114,6 +127,8 @@ class UnipileClient:
     async def search_linkedin_people(self, account_id: str, keywords: str, location: List[str] = None, 
                                    industry: List[str] = None, limit: int = 10) -> Dict[str, Any]:
         """Buscar personas en LinkedIn"""
+        self._check_config()
+        
         search_params = {
             "api": "classic",  # o "sales_navigator" si disponible
             "category": "people",
@@ -124,11 +139,13 @@ class UnipileClient:
         if location:
             # Primero necesitas convertir location names a IDs
             location_ids = await self._get_location_ids(account_id, location)
-            search_params["location"] = location_ids
+            if location_ids:
+                search_params["location"] = location_ids
         
         if industry:
             industry_ids = await self._get_industry_ids(account_id, industry)
-            search_params["industry"] = {"include": industry_ids}
+            if industry_ids:
+                search_params["industry"] = {"include": industry_ids}
         
         try:
             response = requests.post(
@@ -200,6 +217,8 @@ class UnipileClient:
     
     async def get_profile(self, account_id: str, profile_identifier: str, sections: str = "*") -> Dict[str, Any]:
         """Obtener perfil completo de LinkedIn"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/users/{profile_identifier}",
@@ -222,6 +241,8 @@ class UnipileClient:
     
     async def send_invitation(self, account_id: str, provider_id: str, message: str) -> Dict[str, Any]:
         """Enviar invitación de LinkedIn"""
+        self._check_config()
+        
         payload = {
             "account_id": account_id,
             "provider_id": provider_id,
@@ -252,6 +273,8 @@ class UnipileClient:
     
     async def send_message(self, account_id: str, attendee_provider_id: str, text: str) -> Dict[str, Any]:
         """Enviar mensaje directo a conexión existente"""
+        self._check_config()
+        
         payload = {
             "account_id": account_id,
             "attendees_ids": [attendee_provider_id],
@@ -276,6 +299,8 @@ class UnipileClient:
     
     async def send_inmail(self, account_id: str, provider_id: str, text: str, api_type: str = "classic") -> Dict[str, Any]:
         """Enviar InMail (requiere LinkedIn Premium)"""
+        self._check_config()
+        
         payload = {
             "account_id": account_id,
             "attendees_ids": [provider_id],
@@ -308,6 +333,8 @@ class UnipileClient:
     
     async def get_chats(self, account_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Obtener lista de chats"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/chats",
@@ -326,6 +353,8 @@ class UnipileClient:
     
     async def get_messages(self, chat_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Obtener mensajes de un chat"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/chats/{chat_id}/messages",
@@ -345,6 +374,8 @@ class UnipileClient:
     
     async def get_relations(self, account_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Obtener conexiones/relaciones"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/users/relations",
@@ -363,6 +394,8 @@ class UnipileClient:
     
     async def get_sent_invitations(self, account_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Obtener invitaciones enviadas"""
+        self._check_config()
+        
         try:
             response = requests.get(
                 f"{self.api_url}/users/invitations/sent",
@@ -385,6 +418,8 @@ class UnipileClient:
     
     async def create_webhook(self, request_url: str, source: str = "messaging") -> Dict[str, Any]:
         """Crear webhook para recibir eventos"""
+        self._check_config()
+        
         payload = {
             "request_url": request_url,
             "source": source,  # messaging, users, emails
@@ -414,18 +449,39 @@ class UnipileClient:
     # ==========================================
     
     async def check_rate_limits(self, account_id: str) -> Dict[str, Any]:
-        """Verificar límites de rate disponibles (implementación personalizada)"""
-        # Esto requiere tracking interno ya que Unipile no expone límites directamente
-        # Deberías implementar un sistema interno para trackear:
-        # - Invitaciones enviadas hoy/esta semana
-        # - Búsquedas realizadas hoy
-        # - Mensajes enviados hoy
-        pass
+        """Verificar límites de rate disponibles"""
+        # Por ahora retornar valores simulados
+        # En una implementación real, esto vendría de tu base de datos
+        # donde trackeas el uso diario/semanal
+        return {
+            "daily_invitations_sent": 0,
+            "daily_invitations_limit": 80,
+            "weekly_invitations_sent": 0,
+            "weekly_invitations_limit": 200,
+            "daily_searches": 0,
+            "daily_searches_limit": 100,
+            "can_send_invitation": True,
+            "can_search": True,
+            "next_available_slot": datetime.now().isoformat()
+        }
     
     async def wait_for_rate_limit(self, action_type: str, account_id: str):
         """Esperar si se han alcanzado límites de rate"""
         # Implementar lógica de espera basada en límites de LinkedIn
-        pass
+        # Por ahora esperar tiempo random entre acciones
+        if action_type == "invitation":
+            wait_time = 60  # 1 minuto entre invitaciones
+        elif action_type == "search":
+            wait_time = 30  # 30 segundos entre búsquedas
+        else:
+            wait_time = 10
+        
+        logger.info(f"Waiting {wait_time}s for rate limit compliance")
+        await asyncio.sleep(wait_time)
 
 # Instancia global
-unipile_client = UnipileClient()
+try:
+    unipile_client = UnipileClient()
+except Exception as e:
+    logger.error(f"Error initializing Unipile client: {e}")
+    unipile_client = None
