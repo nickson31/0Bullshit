@@ -9,7 +9,7 @@ import logging
 
 from models.schemas import ApiResponse
 from database.database import db
-from api.utils import get_current_user
+from api.auth import get_current_user
 from integrations.unipile_client import unipile_client
 
 # Imports dinámicos para evitar errores de importación circular
