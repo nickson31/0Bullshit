@@ -5,7 +5,7 @@
 
 ## 🎯 **EL ORIGEN: AuraAero y el Problema Real**
 
-Todo comenzó con **AuraAero**, una startup que necesitaba encontrar inversores para su ronda de financiación. Me pidieron hacer **scraping de inversores** - algo que parecía simple pero que reveló un problema masivo en el ecosistema startup.
+Todo comenzó con **AuraAero**, una empresa que necesitaba encontrar inversores para su ronda de financiación. Me pidieron hacer **scraping de inversores** - algo que parecía simple pero que reveló un problema masivo en el ecosistema startup.
 
 ### **El Desafío Inicial:**
 - ✅ **Scrapeamos miles de inversores** relevantes para AuraAero
@@ -99,8 +99,7 @@ Cuando conseguimos el objetivo para AuraAero, nos dimos cuenta de que habíamos 
 
 ### **🔍 MOTOR DE BÚSQUEDA DE INVERSORES**
 - **Base de Datos**: +10,000 angel investors y fund employees
-- **Algoritmo de Relevancia**: Scoring basado en sector, stage, geografía, track record
-- **Scraping Automatizado**: Actualización continua de datos de LinkedIn, web, etc.
+- **Algoritmo de Relevancia**: Scoring basado en sector y stage
 - **Personalización**: Resultados específicos por proyecto y completeness score
 
 ### **📱 AUTOMATIZACIÓN LINKEDIN (via Unipile)**
@@ -120,15 +119,15 @@ Cuando conseguimos el objetivo para AuraAero, nos dimos cuenta de que habíamos 
 
 ## 🎯 **LA VISIÓN: Más Allá de Inversores**
 
-### **ROADMAP 2024-2025:**
+### **ROADMAP 2025-2025:**
 
-#### **Q1 2024** *(Actual)*
+#### **Q2 2025** *(Actual)*
 ✅ **MVP Funcional** con inversores  
 ✅ **Sistema de IA completamente integrado**  
 ✅ **Automatización LinkedIn working**  
 ✅ **Pagos Stripe operativos**  
 
-#### **Q2-Q3 2024** *(Próximos Meses)*
+#### **Q2-Q3 2025** *(Próximos Meses)*
 🚀 **Expansión a SALES**:
 - Scraping de prospects para B2B sales
 - Automatización de cold outreach para ventas
@@ -140,7 +139,7 @@ Cuando conseguimos el objetivo para AuraAero, nos dimos cuenta de que habíamos 
 - Scraping as a Service
 - Custom data requests
 
-#### **Q4 2024** *(Vision)*
+#### **Q4 2025** *(Vision)*
 🌟 **Plataforma Universal de Outreach**:
 - Inversores ✅
 - Sales prospects 🔄
@@ -158,7 +157,7 @@ Cuando conseguimos el objetivo para AuraAero, nos dimos cuenta de que habíamos 
 > **No había nadie para desarrollar la plataforma** - así que tuve que hacerlo yo desde 0  
 
 ### **La Realidad:**
-- **Pasé 6 meses** desarrollando el backend completo desde cero
+- **Pasé 2 meses** desarrollando el backend completo desde cero
 - **Aprendí FastAPI, Supabase, integraciones complejas** para que funcionara
 - **Resultado**: Plataforma production-ready, pero tiempo robado al scraping
 
