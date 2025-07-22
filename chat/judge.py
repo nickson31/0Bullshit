@@ -131,7 +131,7 @@ class JudgeSystem:
         }
     
     def _create_judge_prompt(self, user_message: str, context: Dict[str, Any], completeness_score: float) -> str:
-        """Crear prompt para Gemini que actúe como juez/policía"""
+        """Crear prompt para Gemini que actúe como juez/policía con decisiones múltiples"""
         
         y_combinator_principles = """
         PRINCIPIOS Y-COMBINATOR PARA CONTEXTO:
@@ -149,22 +149,28 @@ class JudgeSystem:
 
         {y_combinator_principles}
 
+        PRIMERA TAREA OBLIGATORIA - DETECCIÓN DE IDIOMA:
+        Lee este texto y determina si es español, inglés u otro:
+        MENSAJE: "{user_message}"
+        - Español: Texto en Español 
+        - Inglés: Texto en Inglés
+        - Otro Idioma: Texto en Inglés
+
         CONTEXTO DEL PROYECTO:
         {json.dumps(context, indent=2, ensure_ascii=False)}
 
-        MENSAJE DEL USUARIO: "{user_message}"
-
         SCORE DE COMPLETITUD ACTUAL: {completeness_score:.0%}
 
-        INSTRUCCIONES:
-        1. Analiza la intención real del usuario con expertise de Y-Combinator
-        2. Considera el contexto del proyecto y completitud
-        3. Decide la mejor acción basada en principios de mentoría efectiva
-        4. Si detectas spam/bullshit/contenido ofensivo, marca anti_spam
-        5. Si completitud < 50%, considera si necesita hacer preguntas obligatorias primero
+        INSTRUCCIONES CRÍTICAS PARA DECISIONES MÚLTIPLES:
+        1. PUEDES y DEBES tomar MÚLTIPLES DECISIONES simultáneamente cuando sea apropiado
+        2. Si completitud >= 50% y pide búsquedas: PRIMARY_DECISION = búsqueda + SECONDARY_DECISIONS = ["ask_questions"] 
+        3. Si completitud < 50% y pide búsquedas: SOLO "ask_questions" (bloquear búsqueda)
+        4. Si detectas spam/bullshit: SOLO "anti_spam"
+        5. Extrae KEYWORDS (no frases), como requiere el sistema de búsqueda
 
         RESPONDE SOLO CON JSON VÁLIDO:
         {{
+            "detected_language": "es|en|other",
             "probabilities": {{
                 "search_investors": 0-100,
                 "search_companies": 0-100,
@@ -172,31 +178,37 @@ class JudgeSystem:
                 "ask_questions": 0-100,
                 "anti_spam": 0-100
             }},
-            "decision": "search_investors|search_companies|mentoring|ask_questions|anti_spam",
-            "reasoning": "Explicación detallada de la decisión basada en Y-Combinator principles",
+            "primary_decision": "search_investors|search_companies|mentoring|ask_questions|anti_spam",
+            "secondary_decisions": ["ask_questions", "mentoring"] (acciones adicionales),
+            "reasoning": "Por qué elegiste estas acciones múltiples",
             "confidence_score": 0-100,
-            "required_questions": ["pregunta1", "pregunta2"] (solo si ask_questions),
+            "required_questions": ["pregunta1", "pregunta2"],
             "extracted_data": {{
-                "categories": ["categoria1", "categoria2"] (si detectas),
-                "stage": "stage detectado" (si detectas),
-                "metrics": {{"arr": "valor", "mrr": "valor"}} (si detectas),
-                "team_info": {{"size": numero}} (si detectas),
-                "problem_solved": "descripción" (si detectas),
-                "product_status": "estado" (si detectas),
-                "additional_data": {{}} (otros datos relevantes)
+                "categories": ["keyword1", "keyword2"] (SOLO keywords, no frases),
+                "stage": "seed|pre-seed|series-a|etc",
+                "metrics": {{"arr": "valor", "mrr": "valor"}},
+                "team_info": {{"size": numero}},
+                "problem_solved": "descripción",
+                "product_status": "estado",
+                "additional_data": {{}}
             }},
             "should_ask_questions": true/false,
             "anti_spam_triggered": true/false
         }}
 
+        CASOS DE DECISIONES MÚLTIPLES REQUERIDOS:
+        - Completitud 50%+ + pide inversores: PRIMARY="search_investors" + SECONDARY=["ask_questions"]
+        - Completitud 50%+ + pide empresas: PRIMARY="search_companies" + SECONDARY=["ask_questions"]  
+        - Esto permite búsqueda INMEDIATA + preguntas para MEJORAR futuras búsquedas
+
         CRITERIOS DE DECISIÓN:
         - SEARCH_INVESTORS: Usuario menciona funding, inversión, Serie A/B, runway, ARR/MRR altos
         - SEARCH_COMPANIES: Usuario menciona necesidad de servicios (legal, marketing, tech, etc.)
         - MENTORING: Preguntas sobre estrategia, growth, product-market fit, equipo
-        - ASK_QUESTIONS: Completitud < 50% Y usuario quiere búsquedas, O información muy vaga
+        - ASK_QUESTIONS: Siempre como secundaria si completitud permite búsqueda
         - ANTI_SPAM: Contenido ofensivo, sin sentido, o claramente spam
 
-        RECUERDA: Actúa como un mentor Y-Combinator que prioriza EJECUTAR y obtener TRACCIÓN REAL.
+        RECUERDA: Prioriza EJECUTAR (hacer búsqueda si es posible) Y obtener más info para MEJORAR.
         """
     
     def _parse_gemini_response(self, response_text: str) -> Dict[str, Any]:
@@ -240,33 +252,48 @@ class JudgeSystem:
         completeness_score: float,
         anti_spam_triggered: bool
     ) -> JudgeDecision:
-        """Ajustar decisión basada en completitud y anti-spam"""
+        """Ajustar decisión basada en completitud y anti-spam con soporte para decisiones múltiples"""
         
         # Si es anti-spam, override decision
         if anti_spam_triggered or decision_data.get("anti_spam_triggered", False):
-            decision_data["decision"] = "anti_spam"
+            decision_data["primary_decision"] = "anti_spam"
+            decision_data["secondary_decisions"] = []
             decision_data["probabilities"]["anti_spam"] = 100
             decision_data["should_ask_questions"] = False
         
-        # Si completitud < 50% y quiere búsquedas, forzar preguntas
-        elif completeness_score < 0.5 and decision_data["decision"] in ["search_investors", "search_companies"]:
+        # Si completitud < 50% y quiere búsquedas, forzar SOLO preguntas
+        elif completeness_score < 0.5 and decision_data.get("primary_decision") in ["search_investors", "search_companies"]:
+            decision_data["primary_decision"] = "ask_questions"
+            decision_data["secondary_decisions"] = []
             decision_data["should_ask_questions"] = True
             decision_data["required_questions"] = self._generate_required_questions(completeness_score)
         
-        # Si completitud >= 50% pero < 70%, recomendar preguntas después
-        elif 0.5 <= completeness_score < 0.7 and decision_data["decision"] in ["search_investors", "search_companies"]:
-            decision_data["should_ask_questions"] = False  # No bloquear, pero recomendar después
+        # Si completitud >= 50% y quiere búsquedas, permitir búsqueda + agregar preguntas como secundaria
+        elif completeness_score >= 0.5 and decision_data.get("primary_decision") in ["search_investors", "search_companies"]:
+            # Mantener la decisión de búsqueda como primaria
+            # Agregar ask_questions como secundaria para mejorar futuras búsquedas
+            secondary_decisions = decision_data.get("secondary_decisions", [])
+            if "ask_questions" not in secondary_decisions:
+                secondary_decisions.append("ask_questions")
+            decision_data["secondary_decisions"] = secondary_decisions
+            decision_data["should_ask_questions"] = True
+        
+        # Garantizar compatibilidad con campo legacy "decision"
+        if "primary_decision" not in decision_data:
+            decision_data["primary_decision"] = decision_data.get("decision", "mentoring")
         
         return JudgeDecision(
             probabilities=JudgeProbabilities(**decision_data["probabilities"]),
-            decision=decision_data["decision"],
+            primary_decision=decision_data["primary_decision"],
+            secondary_decisions=decision_data.get("secondary_decisions", []),
             reasoning=decision_data["reasoning"],
             confidence_score=decision_data["confidence_score"],
             required_questions=decision_data.get("required_questions", []),
             extracted_data=ExtractedData(**decision_data.get("extracted_data", {})) if decision_data.get("extracted_data") else None,
             completeness_score=completeness_score,
             should_ask_questions=decision_data.get("should_ask_questions", False),
-            anti_spam_triggered=anti_spam_triggered or decision_data.get("anti_spam_triggered", False)
+            anti_spam_triggered=anti_spam_triggered or decision_data.get("anti_spam_triggered", False),
+            detected_language=decision_data.get("detected_language", "es")
         )
     
     def _generate_required_questions(self, completeness_score: float) -> List[str]:

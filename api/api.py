@@ -551,10 +551,10 @@ async def search_angel_investors(keywords: Dict[str, List[str]], limit: int = 15
     """Buscar inversores ángeles en la base de datos"""
     
     try:
-        # Construir query base
+        # Construir query base con nombres exactos de columnas según el prompt
         query_builder = db.supabase.table("Angel_Investors").select("*")
         
-        # Filtrar por score mínimo (como especifica el prompt)
+        # Filtrar por score mínimo exacto del prompt: no mostrar resultados < 40.0
         query_builder = query_builder.gte("angel_score", 40.0)
         
         # Aplicar filtros de keywords
@@ -613,14 +613,14 @@ async def search_angel_investors(keywords: Dict[str, List[str]], limit: int = 15
                         break
             
             investors.append(InvestorSearchResult(
-                linkedin_url=inv.get("linkedinUrl", ""),
-                full_name=inv.get("fullName", ""),
+                linkedin_url=inv.get("linkedinUrl", ""),  # Nombre exacto del prompt
+                full_name=inv.get("fullName", ""),         # Nombre exacto del prompt
                 headline=inv.get("headline"),
                 email=inv.get("email"),
-                location=inv.get("addressWithCountry"),
-                profile_pic=inv.get("profilePic"),
+                location=inv.get("addressWithCountry"),    # Nombre exacto del prompt
+                profile_pic=inv.get("profilePic"),         # Nombre exacto del prompt
                 angel_score=float(inv.get("angel_score", 0)),
-                validation_reasons_es=inv.get("validation_reasons_spanish"),
+                validation_reasons_es=inv.get("validation_reasons_spanish"),  # Nombre exacto del prompt
                 categories_match=category_matches,
                 stage_match=stage_match,
                 relevance_score=min(relevance, 1.0)
@@ -665,20 +665,20 @@ async def search_investment_funds(keywords: Dict[str, List[str]], limit: int = 1
                 if keyword.lower() in stage_keywords_str.lower():
                     relevance += 0.3
             
-            # Obtener empleados del fondo con score >= 5.9
+            # Obtener empleados del fondo con score >= 5.9 (nombres exactos del prompt)
             employees_result = db.supabase.table("Employee_Funds").select("*").eq("fund_name", fund.get("name", "")).gte("score_combinado", 5.9).limit(5).execute()
             
             employees = []
             for emp in employees_result.data:
                 employees.append({
-                    "linkedin_url": emp.get("linkedinUrl"),
-                    "full_name": emp.get("fullName"),
+                    "linkedin_url": emp.get("linkedinUrl"),        # Nombre exacto del prompt
+                    "full_name": emp.get("fullName"),             # Nombre exacto del prompt
                     "headline": emp.get("headline"),
                     "email": emp.get("email"),
-                    "profile_pic": emp.get("profilePic"),
-                    "location": emp.get("addressWithCountry"),
-                    "job_title": emp.get("jobTitle"),
-                    "combined_score": emp.get("score_combinado", 0)
+                    "profile_pic": emp.get("profilePic"),         # Nombre exacto del prompt
+                    "location": emp.get("addressWithCountry"),    # Nombre exacto del prompt
+                    "job_title": emp.get("jobTitle"),             # Nombre exacto del prompt
+                    "combined_score": emp.get("score_combinado", 0)  # Nombre exacto del prompt
                 })
             
             funds.append({
@@ -743,12 +743,12 @@ async def search_companies(keywords: Dict[str, List[str]], limit: int = 10) -> L
                     relevance += 0.2
             
             companies.append(CompanySearchResult(
-                linkedin_url=comp.get("linkedin", ""),
-                nombre=comp.get("nombre", ""),
-                descripcion_corta=comp.get("descripcion_corta"),
-                web_empresa=comp.get("web_empresa"),
-                sector_categorias=comp.get("sector_categorias"),
-                ubicacion_general=comp.get("ubicacion_general"),
+                linkedin_url=comp.get("linkedin", ""),           # Primary Key exacto del prompt
+                nombre=comp.get("nombre", ""),                   # Nombre exacto del prompt
+                descripcion_corta=comp.get("descripcion_corta"), # Nombre exacto del prompt
+                web_empresa=comp.get("web_empresa"),             # Nombre exacto del prompt
+                sector_categorias=comp.get("sector_categorias"), # Nombre exacto del prompt
+                ubicacion_general=comp.get("ubicacion_general"), # Nombre exacto del prompt
                 relevance_score=min(relevance, 1.0)
             ))
         
@@ -836,13 +836,25 @@ async def search_investors_endpoint(
         final_results = angel_results + fund_results
         final_results.sort(key=lambda x: x["relevance_score"], reverse=True)
         
-        return SearchResults(
+        search_results = SearchResults(
             results=final_results,
             total_found=len(final_results),
             search_type="investors",
             criteria_used=keywords,
             has_more=len(angels) + len(funds) > 15
         )
+        
+        # Guardar resultados en sidebar como especifica el prompt
+        await save_search_results_to_sidebar(
+            project_id=search_request.project_id,
+            user_id=current_user.id,
+            search_type="investors",
+            search_query=query_text,
+            results_data=search_results.dict(),
+            detected_language=keywords.get("detected_language", "es")
+        )
+        
+        return search_results
         
     except Exception as e:
         logger.error(f"Search error: {e}")
@@ -881,13 +893,25 @@ async def search_companies_endpoint(
         # Buscar empresas
         companies = await search_companies(keywords, limit=10)
         
-        return SearchResults(
+        search_results = SearchResults(
             results=[{"type": "company", "data": comp.dict(), "relevance_score": comp.relevance_score} for comp in companies],
             total_found=len(companies),
             search_type="companies", 
             criteria_used=keywords,
             has_more=len(companies) >= 10
         )
+        
+        # Guardar resultados en sidebar como especifica el prompt
+        await save_search_results_to_sidebar(
+            project_id=search_request.project_id,
+            user_id=current_user.id,
+            search_type="companies",
+            search_query=query_text,
+            results_data=search_results.dict(),
+            detected_language=keywords.get("detected_language", "es")
+        )
+        
+        return search_results
         
     except Exception as e:
         logger.error(f"Search error: {e}")
@@ -1124,6 +1148,163 @@ async def check_and_generate_upsell(
     except Exception as e:
         logger.error(f"Error in upsell system: {e}")
         return None
+
+# ==========================================
+# SAVED RESULTS SYSTEM (SIDEBAR)
+# ==========================================
+
+async def save_search_results_to_sidebar(
+    project_id: UUID,
+    user_id: UUID,
+    search_type: str,
+    search_query: str,
+    results_data: Dict[str, Any],
+    detected_language: str = "es"
+):
+    """Guardar resultados de búsqueda para mostrar en sidebar como especifica el prompt"""
+    
+    try:
+        # Generar título automático para la búsqueda usando Gemini
+        if detected_language == "en":
+            title_prompt = f"""
+            Generate a short title (max 4 words) for this search:
+            Query: "{search_query}"
+            Type: {search_type}
+            
+            Examples:
+            - "Fintech Seed Investors"
+            - "Marketing Agencies"
+            - "SaaS B2B Companies"
+            
+            Respond with ONLY the title:
+            """
+        else:  # Spanish
+            title_prompt = f"""
+            Genera un título corto (máximo 4 palabras) para esta búsqueda:
+            Query: "{search_query}"
+            Tipo: {search_type}
+            
+            Ejemplos:
+            - "Inversores Fintech Seed"
+            - "Agencias Marketing"
+            - "Empresas SaaS B2B"
+            
+            Responde SOLO con el título:
+            """
+        
+        # Generar título
+        from chat.judge import judge
+        response = judge.model.generate_content(title_prompt)
+        generated_title = response.text.strip().strip('"\'')
+        
+        # Guardar en base de datos
+        saved_search = {
+            "id": str(uuid4()),
+            "project_id": str(project_id),
+            "user_id": str(user_id),
+            "search_type": search_type,
+            "search_query": search_query,
+            "results_data": results_data,
+            "total_results": results_data.get("total_found", 0),
+            "title": generated_title,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        db.supabase.table("saved_search_results").insert(saved_search).execute()
+        
+    except Exception as e:
+        logger.error(f"Error saving search results to sidebar: {e}")
+        # No fallar por esto
+
+@app.get("/api/v1/projects/{project_id}/saved-results/investors")
+async def get_saved_investor_results(
+    project_id: UUID,
+    current_user: UserProfileResponse = Depends(get_current_user_auth)
+):
+    """Obtener resultados guardados de inversores para sidebar"""
+    try:
+        # Verificar proyecto
+        project = await db.get_project(project_id, current_user.id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Obtener resultados guardados
+        result = db.supabase.table("saved_search_results").select("*").eq("project_id", str(project_id)).eq("user_id", str(current_user.id)).eq("search_type", "investors").order("created_at", desc=True).execute()
+        
+        saved_searches = []
+        for search in result.data:
+            saved_searches.append({
+                "id": search["id"],
+                "title": search["title"],
+                "search_query": search["search_query"],
+                "total_results": search["total_results"],
+                "created_at": search["created_at"],
+                "results_data": search["results_data"]
+            })
+        
+        return {
+            "search_type": "investors",
+            "saved_searches": saved_searches,
+            "total_searches": len(saved_searches)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting saved investor results: {e}")
+        raise HTTPException(status_code=500, detail="Error getting saved results")
+
+@app.get("/api/v1/projects/{project_id}/saved-results/companies")
+async def get_saved_company_results(
+    project_id: UUID,
+    current_user: UserProfileResponse = Depends(get_current_user_auth)
+):
+    """Obtener resultados guardados de empresas para sidebar"""
+    try:
+        # Verificar proyecto
+        project = await db.get_project(project_id, current_user.id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Obtener resultados guardados
+        result = db.supabase.table("saved_search_results").select("*").eq("project_id", str(project_id)).eq("user_id", str(current_user.id)).eq("search_type", "companies").order("created_at", desc=True).execute()
+        
+        saved_searches = []
+        for search in result.data:
+            saved_searches.append({
+                "id": search["id"],
+                "title": search["title"],
+                "search_query": search["search_query"],
+                "total_results": search["total_results"],
+                "created_at": search["created_at"],
+                "results_data": search["results_data"]
+            })
+        
+        return {
+            "search_type": "companies",
+            "saved_searches": saved_searches,
+            "total_searches": len(saved_searches)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting saved company results: {e}")
+        raise HTTPException(status_code=500, detail="Error getting saved results")
+
+@app.delete("/api/v1/saved-results/{result_id}")
+async def delete_saved_result(
+    result_id: UUID,
+    current_user: UserProfileResponse = Depends(get_current_user_auth)
+):
+    """Eliminar resultado guardado"""
+    try:
+        result = db.supabase.table("saved_search_results").delete().eq("id", str(result_id)).eq("user_id", str(current_user.id)).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Saved result not found")
+        
+        return {"message": "Saved result deleted successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error deleting saved result: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting saved result")
 
 # ==========================================
 # PROJECT ENDPOINTS

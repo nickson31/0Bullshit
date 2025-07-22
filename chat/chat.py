@@ -87,8 +87,8 @@ class ChatSystem:
                 [{"role": conv.role, "content": conv.content} for conv in conversation_history[-5:]]
             )
             
-            # 4. Ejecutar acción basada en decisión del juez
-            assistant_response, search_results = await self._execute_judge_decision(
+            # 4. Ejecutar acción(es) basada en decisión(es) del juez
+            assistant_response, search_results = await self._execute_multiple_judge_decisions(
                 judge_decision,
                 user_message,
                 project,
@@ -96,8 +96,14 @@ class ChatSystem:
                 websocket_callback
             )
             
-            # 5. Guardar respuesta del asistente
-            assistant_conversation = ChatResponse(
+                    # 5. Generar título automático si es el primer mensaje del usuario (como ChatGPT/Claude/Gemini)
+        await self._generate_conversation_title_if_first_message(project_id, user_id, user_message, judge_decision.detected_language)
+        
+        # 6. Guardar métrica del idioma preferido del usuario
+        await self._update_user_language_preference(user_id, judge_decision.detected_language)
+        
+        # 7. Guardar respuesta del asistente
+        assistant_conversation = ChatResponse(
                 id=uuid4(),
                 project_id=project_id,
                 role="assistant",
@@ -137,6 +143,109 @@ class ChatSystem:
             )
             return error_response, None
     
+    async def _execute_multiple_judge_decisions(
+        self,
+        decision: JudgeDecision,
+        user_message: str,
+        project,
+        user_id: UUID,
+        websocket_callback=None
+    ) -> Tuple[str, Optional[SearchResults]]:
+        """Ejecutar decisiones múltiples del juez - IMPLEMENTACIÓN CRÍTICA DEL PROMPT"""
+        
+        if decision.anti_spam_triggered:
+            return await self._handle_anti_spam(decision.detected_language), None
+        
+        # Ejecutar decisión primaria
+        primary_response, search_results = await self._execute_single_decision(
+            decision.primary_decision, decision, user_message, project, user_id, websocket_callback
+        )
+        
+        # Ejecutar decisiones secundarias y combinar respuestas
+        secondary_responses = []
+        for secondary_decision in decision.secondary_decisions:
+            if secondary_decision != decision.primary_decision:  # Evitar duplicación
+                secondary_response, _ = await self._execute_single_decision(
+                    secondary_decision, decision, user_message, project, user_id, None
+                )
+                if secondary_response:
+                    secondary_responses.append(secondary_response)
+        
+        # Combinar respuestas según idioma detectado
+        combined_response = await self._combine_multiple_responses(
+            primary_response, 
+            secondary_responses, 
+            decision.detected_language,
+            decision.primary_decision in ["search_investors", "search_companies"]
+        )
+        
+        return combined_response, search_results
+    
+    async def _execute_single_decision(
+        self,
+        decision_type: str,
+        decision: JudgeDecision,
+        user_message: str,
+        project,
+        user_id: UUID,
+        websocket_callback=None
+    ) -> Tuple[str, Optional[SearchResults]]:
+        """Ejecutar una decisión individual"""
+        
+        if decision_type == "ask_questions":
+            return await self._handle_ask_questions(decision, project), None
+        
+        elif decision_type == "search_investors":
+            return await self._handle_search_investors(
+                decision, project, user_message, websocket_callback
+            )
+        
+        elif decision_type == "search_companies":
+            return await self._handle_search_companies(
+                decision, project, user_message, websocket_callback
+            )
+        
+        elif decision_type == "mentoring":
+            return await self._handle_mentoring(
+                decision, user_message, project
+            ), None
+        
+        else:
+            return await self._handle_general_response(user_message, project, decision.detected_language), None
+    
+    async def _combine_multiple_responses(
+        self, 
+        primary_response: str, 
+        secondary_responses: List[str],
+        detected_language: str,
+        has_search_results: bool
+    ) -> str:
+        """Combinar respuestas múltiples de manera natural según idioma"""
+        
+        if not secondary_responses:
+            return primary_response
+        
+        # Determinar conectores según idioma
+        if detected_language == "en":
+            connector = "\n\n**Additional Information:**\n"
+            questions_header = "To improve future searches and provide better recommendations:"
+        else:  # es o other -> español
+            connector = "\n\n**Información Adicional:**\n"
+            questions_header = "Para mejorar futuras búsquedas y darte mejores recomendaciones:"
+        
+        combined = primary_response
+        
+        for secondary_response in secondary_responses:
+            if "Para ayudarte de la mejor manera" in secondary_response or "To help you better" in secondary_response:
+                # Es una pregunta de completitud - agregar con header específico
+                combined += f"\n\n{questions_header}\n{secondary_response}"
+            else:
+                # Otras respuestas secundarias
+                combined += f"{connector}{secondary_response}"
+        
+        return combined
+    
+    # Mantener método legacy para compatibilidad
     async def _execute_judge_decision(
         self,
         decision: JudgeDecision,
@@ -145,46 +254,36 @@ class ChatSystem:
         user_id: UUID,
         websocket_callback=None
     ) -> Tuple[str, Optional[SearchResults]]:
-        """Ejecutar la decisión del juez"""
-        
-        if decision.anti_spam_triggered:
-            return await self._handle_anti_spam(), None
-        
-        elif decision.decision == "ask_questions":
-            return await self._handle_ask_questions(decision, project), None
-        
-        elif decision.decision == "search_investors":
-            return await self._handle_search_investors(
-                decision, project, user_message, websocket_callback
-            )
-        
-        elif decision.decision == "search_companies":
-            return await self._handle_search_companies(
-                decision, project, user_message, websocket_callback
-            )
-        
-        elif decision.decision == "mentoring":
-            return await self._handle_mentoring(
-                decision, user_message, project
-            ), None
-        
-        else:
-            return await self._handle_general_response(user_message, project), None
+        """Método legacy - redirigir a nueva implementación múltiple"""
+        return await self._execute_multiple_judge_decisions(
+            decision, user_message, project, user_id, websocket_callback
+        )
     
-    async def _handle_anti_spam(self) -> str:
-        """Manejar contenido spam/ofensivo"""
+    async def _handle_anti_spam(self, detected_language: str = "es") -> str:
+        """Manejar contenido spam/ofensivo con respuesta cortante según idioma"""
         
-        anti_spam_responses = [
-            "Entiendo que quieres probar la plataforma, pero estoy aquí para ayudarte con tu startup de verdad. ¿Podrías contarme sobre tu proyecto?",
-            
-            "Esta plataforma está diseñada para founders serios. Si tienes una startup o idea de negocio, me encantaría ayudarte. ¿Qué estás construyendo?",
-            
-            "Hey, soy un mentor de Y-Combinator virtual. Estoy aquí para ayudarte a hacer crecer tu startup. ¿Tienes un proyecto en el que esté trabajando?",
-            
-            "Vamos a enfocarnos en algo productivo. ¿Tienes una startup, idea de negocio, o necesitas ayuda para conseguir inversión? Estoy aquí para eso.",
-        ]
+        if detected_language == "en":
+            anti_spam_responses = [
+                "I get that you want to test the platform, but I'm here to help you with your real startup. Could you tell me about your project?",
+                
+                "This platform is designed for serious founders. If you have a startup or business idea, I'd love to help you. What are you building?",
+                
+                "Hey, I'm a virtual Y-Combinator mentor. I'm here to help you grow your startup. Do you have a project you're working on?",
+                
+                "Let's focus on something productive. Do you have a startup, business idea, or need help getting investment? That's what I'm here for.",
+            ]
+        else:  # Spanish or other -> Spanish  
+            anti_spam_responses = [
+                "Entiendo que quieres probar la plataforma, pero estoy aquí para ayudarte con tu startup de verdad. ¿Podrías contarme sobre tu proyecto?",
+                
+                "Esta plataforma está diseñada para founders serios. Si tienes una startup o idea de negocio, me encantaría ayudarte. ¿Qué estás construyendo?",
+                
+                "Hey, soy un mentor de Y-Combinator virtual. Estoy aquí para ayudarte a hacer crecer tu startup. ¿Tienes un proyecto en el que esté trabajando?",
+                
+                "Vamos a enfocarnos en algo productivo. ¿Tienes una startup, idea de negocio, o necesitas ayuda para conseguir inversión? Estoy aquí para eso.",
+            ]
         
-        return anti_spam_responses[0]  # Por ahora usar el primero
+        return anti_spam_responses[0]  # Respuesta cortante pero útil
     
     async def _handle_ask_questions(self, decision: JudgeDecision, project) -> str:
         """Manejar cuando se necesita hacer preguntas"""
@@ -500,6 +599,91 @@ Como mentor, mi recomendación es enfocarte en:
 
 ¿Hay algún aspecto específico en el que quieres profundizar?"""
     
+    async def _generate_conversation_title_if_first_message(
+        self, 
+        project_id: UUID, 
+        user_id: UUID, 
+        user_message: str, 
+        detected_language: str
+    ):
+        """Generar título automático para la conversación después del primer mensaje (como ChatGPT/Claude/Gemini)"""
+        
+        try:
+            # Verificar si es el primer mensaje del usuario en este proyecto
+            conversations = await db.get_conversations(project_id, limit=5)
+            user_message_count = len([conv for conv in conversations if conv.role == "user"])
+            
+            # Solo generar título si es el primer mensaje del usuario
+            if user_message_count <= 1:
+                # Crear prompt para generar título
+                if detected_language == "en":
+                    title_prompt = f"""
+                    Generate a short, descriptive title (max 6 words) for this conversation based on the user's first message.
+                    
+                    User message: "{user_message}"
+                    
+                    The title should capture the main topic or intent. Examples:
+                    - "Fintech Seed Funding Search"
+                    - "SaaS Marketing Strategy Help"
+                    - "AI Startup Investor Search"
+                    
+                    Respond with ONLY the title, no quotes or explanation:
+                    """
+                else:  # Spanish or other -> Spanish
+                    title_prompt = f"""
+                    Genera un título corto y descriptivo (máximo 6 palabras) para esta conversación basado en el primer mensaje del usuario.
+                    
+                    Mensaje del usuario: "{user_message}"
+                    
+                    El título debe capturar el tema principal o intención. Ejemplos:
+                    - "Búsqueda Inversores Fintech Seed"
+                    - "Estrategia Marketing SaaS"
+                    - "Ayuda Startup IA"
+                    
+                    Responde SOLO con el título, sin comillas ni explicación:
+                    """
+                
+                # Generar título usando Gemini
+                response = self.model.generate_content(title_prompt)
+                generated_title = response.text.strip().strip('"\'')
+                
+                # Limitar longitud del título
+                if len(generated_title) > 50:
+                    generated_title = generated_title[:47] + "..."
+                
+                # Actualizar el nombre del proyecto con el título generado
+                db.supabase.table("projects").update({
+                    "conversation_title": generated_title,
+                    "updated_at": datetime.now().isoformat()
+                }).eq("id", str(project_id)).eq("user_id", str(user_id)).execute()
+                
+        except Exception as e:
+            logger.error(f"Error generating conversation title: {e}")
+            # No fallar por esto, solo loguear el error
+    
+    async def _update_user_language_preference(self, user_id: UUID, detected_language: str):
+        """Actualizar métrica del idioma preferido del usuario en Supabase"""
+        
+        try:
+            # Normalizar idioma detectado
+            if detected_language == "en":
+                language_preference = "en"
+            elif detected_language == "es":
+                language_preference = "es"
+            else:
+                language_preference = "en"  # Default para otros idiomas
+            
+            # Actualizar preferencia en la base de datos
+            db.supabase.table("users").update({
+                "preferred_language": language_preference,
+                "last_language_detected": detected_language,
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", str(user_id)).execute()
+            
+        except Exception as e:
+            logger.error(f"Error updating user language preference: {e}")
+            # No fallar por esto, solo loguear el error
+
     async def get_project_completeness(self, project_id: UUID, user_id: UUID) -> CompletenessResponse:
         """Obtener análisis de completitud del proyecto"""
         try:

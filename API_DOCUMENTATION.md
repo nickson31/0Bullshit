@@ -1,42 +1,47 @@
-# 0Bullshit Backend API Documentation
+# 🚀 0Bullshit Backend API Documentation
 
-**Versión:** 2.0.0  
+**Version:** 2.0.0  
 **Base URL:** `https://your-backend-url.com/api/v1`  
-**Autenticación:** Bearer Token (JWT)
+**Authentication:** Bearer Token (JWT)
+
+> **Hey Saymon!** 👋 This documentation covers ALL endpoints you need to build the frontend. Each section has examples and the exact request/response formats. Just copy-paste the URLs and you're good to go!
 
 ---
 
-## 📖 Índice
+## 📖 Table of Contents
 
-1. [Autenticación](#autenticación)
-2. [Gestión de Créditos](#gestión-de-créditos)
-3. [Proyectos](#proyectos)
-4. [Chat y Conversaciones](#chat-y-conversaciones)
-5. [Búsquedas](#búsquedas)
-6. [Pagos con Stripe](#pagos-con-stripe)
-7. [LinkedIn y Outreach](#linkedin-y-outreach)
-8. [Utilidades](#utilidades)
+1. [🔐 Authentication](#-authentication) - Login, Register, User Profile
+2. [💰 Credits System](#-credits-system) - Check balance, costs per operation  
+3. [📋 Projects](#-projects) - Create, manage startup projects
+4. [💬 Chat System](#-chat-system) - AI mentor conversations
+5. [🔍 Search System](#-search-system) - Find investors and companies
+6. [💳 Payments](#-payments) - Stripe integration for subscriptions
+7. [🔗 LinkedIn & Outreach](#-linkedin--outreach) - Connect LinkedIn, manage campaigns
+8. [📁 Saved Results](#-saved-results) - Sidebar with saved searches
+9. [🛠 Utilities](#-utilities) - Health check, features
 
 ---
 
-## 🔐 Autenticación
+## 🔐 Authentication
 
-### Registrar Usuario
+> **Saymon:** Use these endpoints for user registration, login, and profile management. All other endpoints require the `Authorization: Bearer <token>` header.
+
+### Register New User
 ```http
 POST /auth/register
 ```
 
-**Body:**
+**Request Body:**
 ```json
 {
-  "email": "usuario@ejemplo.com",
-  "password": "contraseña123",
-  "first_name": "Juan",
-  "last_name": "Pérez"
+  "email": "user@example.com",
+  "password": "password123",
+  "first_name": "John",
+  "last_name": "Doe"
 }
 ```
 
-**Respuesta (201):**
+**Response (201 - Success):**
 ```json
 {
   "access_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
@@ -44,41 +49,67 @@ POST /auth/register
   "expires_in": 86400,
   "user": {
     "id": "uuid",
-    "email": "usuario@ejemplo.com",
-    "first_name": "Juan",
-    "last_name": "Pérez",
+    "email": "user@example.com",
+    "first_name": "John", 
+    "last_name": "Doe",
     "credits_balance": 200,
     "daily_credits": 50,
     "plan": "free",
     "created_at": "2024-01-01T00:00:00Z",
-    "preferred_language": "es"
+    "preferred_language": "en"
   }
 }
 ```
 
-### Login
+### User Login
 ```http
 POST /auth/login
 ```
 
-**Body:**
+**Request Body:**
 ```json
 {
-  "email": "usuario@ejemplo.com",
-  "password": "contraseña123"
+  "email": "user@example.com",
+  "password": "password123"
 }
 ```
 
-### Obtener Perfil Actual
+**Response:** Same as registration
+
+### Get Current User Profile
 ```http
 GET /auth/me
 Authorization: Bearer <token>
 ```
 
-### Obtener Balance de Créditos
+**Response (200):**
+```json
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "first_name": "John",
+  "last_name": "Doe", 
+  "credits_balance": 150,
+  "daily_credits": 50,
+  "plan": "pro",
+  "created_at": "2024-01-01T00:00:00Z",
+  "preferred_language": "en"
+}
+```
+
+### Get Credits Balance
 ```http
 GET /auth/credits
 Authorization: Bearer <token>
+```
+
+**Response (200):**
+```json
+{
+  "credits_balance": 1500,
+  "daily_credits": 150,
+  "plan": "pro"
+}
 ```
 
 ---

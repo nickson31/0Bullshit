@@ -98,7 +98,8 @@ class ExtractedData(BaseModel):
 
 class JudgeDecision(BaseModel):
     probabilities: JudgeProbabilities
-    decision: str  # "search_investors", "search_companies", "mentoring", "ask_questions", "anti_spam"
+    primary_decision: str  # "search_investors", "search_companies", "mentoring", "ask_questions", "anti_spam"
+    secondary_decisions: List[str] = []  # Multiple actions can be taken simultaneously
     reasoning: str
     confidence_score: float = Field(..., ge=0, le=100)
     required_questions: List[str] = []
@@ -106,6 +107,7 @@ class JudgeDecision(BaseModel):
     completeness_score: float
     should_ask_questions: bool
     anti_spam_triggered: bool = False
+    detected_language: str = "es"  # "es", "en", "other"
 
 # ==========================================
 # WELCOME MESSAGE MODELS
@@ -154,6 +156,27 @@ class SearchResults(BaseModel):
     total_found: int
     search_criteria: Dict[str, Any]
     recommendations: List[str] = []
+
+# ==========================================
+# SAVED RESULTS MODELS (PARA SIDEBAR)
+# ==========================================
+
+class SavedSearchResult(BaseModel):
+    """Resultado de búsqueda guardado para sidebar"""
+    id: UUID
+    project_id: UUID
+    search_type: str  # "investors" or "companies"
+    search_query: str
+    results_data: Dict[str, Any]  # JSON con los resultados
+    total_results: int
+    created_at: datetime
+    title: str  # Título generado automáticamente
+
+class SavedSearchPage(BaseModel):
+    """Página de resultados guardados para sidebar"""
+    search_type: str
+    saved_searches: List[SavedSearchResult]
+    total_searches: int
 
 # ==========================================
 # LIBRARIAN MODELS
