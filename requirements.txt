@@ -1,72 +1,24 @@
-# Core framework
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-
-# Authentication & Security
+uvicorn==0.24.0
+supabase==2.0.2
+google-generativeai==0.3.2
+stripe==7.5.0
+requests==2.31.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-pyjwt==2.8.0
-bcrypt==4.1.2
-
-# Configuration
-python-decouple==3.8
+python-multipart==0.0.6
 pydantic==2.5.0
-pydantic-settings==2.1.0
-
-# Database
-supabase==2.3.0
-
-# HTTP & WebSockets
-requests==2.31.0
+python-dotenv==1.0.0
+bcrypt==4.1.2
+aiofiles==23.2.1
+email-validator==2.1.0
 websockets==12.0
 httpx==0.25.2
-
-# AI & ML
-google-generativeai==0.3.2
-
-# Background tasks (optional - para futura implementación)
-celery==5.3.4
-redis==5.0.1
-
-# Payments
-stripe==7.8.0
-
-# Date & Time
-python-dateutil==2.8.2
-
-# JSON & Data processing
-orjson==3.9.10
-
-# Logging & Monitoring
-structlog==23.2.0
-
-# Development & Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-httpx==0.25.2
-
-# CORS
-python-cors==1.7.0
-
-# Environment
-python-dotenv==1.0.0
-
-# Async support
 asyncio==3.4.3
-aiofiles==23.2.1
-
-# Email (para futuras notificaciones)
-sendgrid==6.10.0
-
-# Rate limiting
-slowapi==0.1.9
-
-# Data validation
-email-validator==2.1.0
-
-# UUID support
+pandas==2.1.4
+numpy==1.25.2
+datetime==5.2
 uuid==1.30
-
-# Timezone support
-pytz==2023.3
+typing-extensions==4.8.0
+jinja2==3.1.2
+markupsafe==2.1.3

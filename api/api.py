@@ -1,301 +1,580 @@
-import os
-import jwt
 import asyncio
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from typing import Optional, Dict, Any, List
-from uuid import UUID, uuid4
-from datetime import datetime
 import json
 import logging
+from datetime import datetime
+from typing import Dict, List, Optional
+from uuid import UUID, uuid4
 
-# Imports locales
-from models.schemas import (
-    ChatMessage, ChatResponse, ProjectCreate, Project, 
-    WelcomeMessage, ConversationHistory, CompletenessResponse,
-    ApiResponse, ConversationList, HealthCheck, UserProfile
-)
-from database.database import db
-from chat.chat import chat_system
-from chat.welcome import welcome_system
-from chat.judge import judge
-from chat.librarian import librarian
-from investors.investors import investor_search_engine
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-# Imports de utilidades
-from api.utils import get_current_user
-
-# Imports de routers
-from api.auth import router as auth_router
-from api.linkedin import router as linkedin_router
-from api.outreach import router as outreach_router
-from api.webhooks import router as webhooks_router
-from api.campaigns import router as campaigns_router
+from api.auth import auth_router, get_current_user
+from api.linkedin import linkedin_router
+from api.outreach import outreach_router
+from api.webhooks import webhooks_router
+from api.campaigns import campaigns_router
+from api.analytics import router as analytics_router
 from payments.payments import router as payments_router
+from config.settings import *
+from database.database import DatabaseManager
+from investors.investors import investor_search_engine
+from chat.upsell_system import upsell_system
+from chat.welcome_system import welcome_system
+from campaigns.message_generator import message_generator
 
-# Configuración de logging
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Inicializar FastAPI
 app = FastAPI(
-    title="0Bullshit Chat API",
-    description="API para el sistema de chat con IA especializado en startups con outreach automatizado",
-    version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    title="0Bullshit API",
+    description="AI-powered investor matching and outreach platform",
+    version="1.0.0"
 )
 
-# CORS
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especificar dominios
+    allow_origins=["*"],  # En producción, especificar dominios exactos
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Database instance
+db = DatabaseManager()
+
+# Incluir todos los routers
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(payments_router, prefix="/api/v1/payments", tags=["Payments"])
+app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["Analytics"])
+app.include_router(linkedin_router, prefix="/api/v1", tags=["LinkedIn"])
+app.include_router(outreach_router, prefix="/api/v1", tags=["Outreach"])
+app.include_router(webhooks_router, prefix="/api/v1", tags=["Webhooks"])
+app.include_router(campaigns_router, prefix="/api/v1", tags=["Campaigns"])
+
+# ==========================================
+# MODELS
+# ==========================================
+
+class ChatMessage(BaseModel):
+    message: str
+    conversation_id: Optional[str] = None
+    project_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    conversation_id: str
+    ai_extractions: Optional[Dict] = None
+    upsell_opportunity: Optional[Dict] = None
+    onboarding_info: Optional[Dict] = None
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str
+    stage: str
+    category: str
+    business_model: Optional[str] = None
+    target_market: Optional[str] = None
+    funding_amount: Optional[str] = None
+
+class SearchRequest(BaseModel):
+    project_id: str
+    search_type: str = "hybrid"  # hybrid, angels, funds
+    limit: int = 15
+
 # ==========================================
 # WEBSOCKET MANAGER
 # ==========================================
 
-class WebSocketManager:
+class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-    
-    async def connect(self, websocket: WebSocket, client_id: str):
+
+    async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
-        self.active_connections[client_id] = websocket
-    
-    def disconnect(self, client_id: str):
-        if client_id in self.active_connections:
-            del self.active_connections[client_id]
-    
-    async def send_message(self, client_id: str, message: Dict[str, Any]):
-        if client_id in self.active_connections:
+        self.active_connections[user_id] = websocket
+        logger.info(f"User {user_id} connected via WebSocket")
+
+    def disconnect(self, user_id: str):
+        if user_id in self.active_connections:
+            del self.active_connections[user_id]
+            logger.info(f"User {user_id} disconnected from WebSocket")
+
+    async def send_personal_message(self, message: str, user_id: str):
+        if user_id in self.active_connections:
             try:
-                await self.active_connections[client_id].send_text(json.dumps(message))
+                await self.active_connections[user_id].send_text(message)
             except Exception as e:
-                logger.error(f"Error sending websocket message: {e}")
-                self.disconnect(client_id)
+                logger.error(f"Error sending message to {user_id}: {e}")
+                self.disconnect(user_id)
 
-ws_manager = WebSocketManager()
+manager = ConnectionManager()
 
 # ==========================================
-# HEALTH CHECK
+# ENHANCED CHAT SYSTEM
 # ==========================================
 
-@app.get("/health", response_model=HealthCheck)
+class EnhancedChatSystem:
+    def __init__(self):
+        self.db = DatabaseManager()
+        
+    async def process_chat_message(
+        self, 
+        user_id: UUID, 
+        message: str, 
+        conversation_id: Optional[str] = None,
+        project_id: Optional[str] = None
+    ) -> Dict:
+        """
+        Procesa un mensaje de chat con todas las funcionalidades integradas
+        """
+        try:
+            # Obtener datos del usuario
+            user_data = await self._get_user_data(user_id)
+            if not user_data:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            # Manejar onboarding si es necesario
+            onboarding_response = await self._handle_onboarding(user_id, user_data, message)
+            if onboarding_response:
+                return onboarding_response
+            
+            # Crear o obtener conversación
+            if not conversation_id:
+                conversation_id = await self._create_conversation(user_id, project_id)
+            
+            # Obtener contexto de la conversación
+            conversation_context = await self._get_conversation_context(conversation_id)
+            
+            # Procesar mensaje con AI (Judge, Mentor, Librarian)
+            ai_response = await self._process_with_ai_agents(
+                user_id, message, conversation_context, user_data, project_id
+            )
+            
+            # Guardar mensaje del usuario
+            await self._save_message(conversation_id, "user", message)
+            
+            # Analizar oportunidad de upsell
+            upsell_opportunity = await upsell_system.analyze_upsell_opportunity(
+                user_id=user_id,
+                conversation_context=conversation_context + f"\nUser: {message}",
+                user_data=user_data,
+                current_action=ai_response.get("action", "chat")
+            )
+            
+            # Construir respuesta final
+            final_response = ai_response["response"]
+            if upsell_opportunity and upsell_opportunity.get("should_upsell"):
+                final_response += f"\n\n{upsell_opportunity['message']}"
+            
+            # Guardar respuesta del asistente
+            await self._save_message(
+                conversation_id, 
+                "assistant", 
+                final_response,
+                ai_response.get("extractions"),
+                upsell_opportunity
+            )
+            
+            # Deducir créditos si es necesario
+            if ai_response.get("credits_used", 0) > 0:
+                await db.deduct_user_credits(user_id, ai_response["credits_used"])
+            
+            return {
+                "response": final_response,
+                "conversation_id": conversation_id,
+                "ai_extractions": ai_response.get("extractions"),
+                "upsell_opportunity": upsell_opportunity,
+                "credits_used": ai_response.get("credits_used", 0),
+                "action_taken": ai_response.get("action")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing chat message: {e}")
+            raise HTTPException(status_code=500, detail="Error processing message")
+    
+    async def _handle_onboarding(self, user_id: UUID, user_data: Dict, message: str) -> Optional[Dict]:
+        """
+        Maneja el proceso de onboarding si es necesario
+        """
+        try:
+            # Verificar si el usuario necesita onboarding
+            if not user_data.get("onboarding_completed", False):
+                # Verificar progreso actual
+                progress = await welcome_system._get_onboarding_progress(user_id)
+                
+                if not progress:
+                    # Iniciar onboarding
+                    return await welcome_system.start_onboarding(user_id, user_data)
+                else:
+                    # Continuar onboarding
+                    current_stage = progress.get("current_stage", "welcome")
+                    return await welcome_system.continue_onboarding(
+                        user_id, current_stage, {"message": message}
+                    )
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error handling onboarding: {e}")
+            return None
+    
+    async def _process_with_ai_agents(
+        self, 
+        user_id: UUID, 
+        message: str, 
+        conversation_context: str, 
+        user_data: Dict,
+        project_id: Optional[str]
+    ) -> Dict:
+        """
+        Procesa el mensaje con los agentes AI (Judge, Mentor, Librarian)
+        """
+        try:
+            # Importar sistemas de chat
+            from chat.judge import judge_system
+            from chat.chat import ChatSystem
+            
+            # Usar el Judge para determinar la acción
+            judge_decision = await judge_system.analyze_user_intent(
+                message, conversation_context, user_data, project_id
+            )
+            
+            credits_used = 0
+            extractions = {}
+            
+            if judge_decision["action"] == "search_investors":
+                # Buscar inversores
+                if not project_id:
+                    return {
+                        "response": "Necesito que me proporciones más información sobre tu proyecto antes de buscar inversores. ¿Podrías contarme sobre tu startup?",
+                        "action": "request_project_info",
+                        "credits_used": 0
+                    }
+                
+                # Obtener datos del proyecto
+                project_data = await self._get_project_data(project_id)
+                if not project_data:
+                    return {
+                        "response": "No encontré información del proyecto. ¿Podrías crear un proyecto primero?",
+                        "action": "request_project_creation",
+                        "credits_used": 0
+                    }
+                
+                # Realizar búsqueda
+                search_results, metadata = await investor_search_engine.search_investors(
+                    project_data=project_data,
+                    completeness_score=judge_decision.get("completeness_score", 75),
+                    search_type="hybrid",
+                    limit=15
+                )
+                
+                # Generar respuesta con resultados
+                response = await self._format_search_results(search_results, metadata)
+                credits_used = metadata.get("credits_used", 50)
+                extractions = {
+                    "search_results": {
+                        "total_found": len(search_results),
+                        "displayed": min(len(search_results), 5),
+                        "average_relevance": metadata.get("average_relevance", 0)
+                    }
+                }
+                
+            elif judge_decision["action"] == "provide_advice":
+                # Usar Mentor Y-Combinator
+                chat_system = ChatSystem()
+                response = await chat_system.get_mentor_advice(message, conversation_context, user_data)
+                
+            elif judge_decision["action"] == "answer_question":
+                # Usar Librarian
+                chat_system = ChatSystem()
+                response = await chat_system.get_librarian_response(message, conversation_context)
+                
+            else:
+                # Respuesta general del chat
+                chat_system = ChatSystem()
+                response = await chat_system.generate_response(message, conversation_context, user_data)
+            
+            return {
+                "response": response,
+                "action": judge_decision["action"],
+                "credits_used": credits_used,
+                "extractions": {
+                    "judge_decision": judge_decision,
+                    **extractions
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing with AI agents: {e}")
+            return {
+                "response": "Lo siento, hubo un error procesando tu mensaje. ¿Podrías intentar de nuevo?",
+                "action": "error",
+                "credits_used": 0
+            }
+    
+    async def _get_user_data(self, user_id: UUID) -> Optional[Dict]:
+        """Obtiene datos completos del usuario"""
+        try:
+            query = db.supabase.table("users").select("*").eq("id", str(user_id)).execute()
+            return query.data[0] if query.data else None
+        except Exception as e:
+            logger.error(f"Error getting user data: {e}")
+            return None
+    
+    async def _get_project_data(self, project_id: str) -> Optional[Dict]:
+        """Obtiene datos del proyecto"""
+        try:
+            query = db.supabase.table("projects").select("*").eq("id", project_id).execute()
+            return query.data[0] if query.data else None
+        except Exception as e:
+            logger.error(f"Error getting project data: {e}")
+            return None
+    
+    async def _create_conversation(self, user_id: UUID, project_id: Optional[str]) -> str:
+        """Crea una nueva conversación"""
+        try:
+            conversation_id = str(uuid4())
+            conversation_data = {
+                "id": conversation_id,
+                "user_id": str(user_id),
+                "project_id": project_id,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            db.supabase.table("conversations").insert(conversation_data).execute()
+            return conversation_id
+            
+        except Exception as e:
+            logger.error(f"Error creating conversation: {e}")
+            raise
+    
+    async def _get_conversation_context(self, conversation_id: str) -> str:
+        """Obtiene el contexto de la conversación"""
+        try:
+            query = db.supabase.table("messages")\
+                .select("*")\
+                .eq("conversation_id", conversation_id)\
+                .order("created_at", desc=False)\
+                .limit(20)\
+                .execute()
+            
+            messages = query.data if query.data else []
+            
+            context = ""
+            for msg in messages:
+                role = "Usuario" if msg["role"] == "user" else "Asistente"
+                context += f"{role}: {msg['content']}\n"
+            
+            return context
+            
+        except Exception as e:
+            logger.error(f"Error getting conversation context: {e}")
+            return ""
+    
+    async def _save_message(
+        self, 
+        conversation_id: str, 
+        role: str, 
+        content: str,
+        ai_extractions: Optional[Dict] = None,
+        upsell_data: Optional[Dict] = None
+    ):
+        """Guarda un mensaje en la base de datos"""
+        try:
+            message_data = {
+                "id": str(uuid4()),
+                "conversation_id": conversation_id,
+                "role": role,
+                "content": content,
+                "ai_extractions": ai_extractions,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            if upsell_data:
+                message_data["ai_extractions"] = {
+                    **(ai_extractions or {}),
+                    "upsell_opportunity": upsell_data
+                }
+            
+            db.supabase.table("messages").insert(message_data).execute()
+            
+        except Exception as e:
+            logger.error(f"Error saving message: {e}")
+    
+    async def _format_search_results(self, results: List[Dict], metadata: Dict) -> str:
+        """Formatea los resultados de búsqueda para mostrar al usuario"""
+        try:
+            if not results:
+                return "No encontré inversores que coincidan con tu perfil en este momento. ¿Podrías proporcionar más detalles sobre tu proyecto?"
+            
+            response = f"Perfecto, he encontrado {len(results)} inversores especializados que coinciden con tu perfil:\n\n**TOP MATCHES:**\n"
+            
+            # Mostrar top 3 resultados
+            for i, investor in enumerate(results[:3], 1):
+                response += f"{i}. **{investor.get('name', 'Inversor')}**"
+                if investor.get('company'):
+                    response += f" - {investor['company']}"
+                response += f"\n   - Especialización: {investor.get('investment_focus', 'General')}"
+                if investor.get('stage_preference'):
+                    response += f"\n   - Etapa: {investor['stage_preference']}"
+                response += f"\n   - Score de relevancia: {investor.get('relevance_score', 0):.1f}%\n\n"
+            
+            response += "**NEXT STEPS:**\n¿Quieres que prepare una campaña de outreach personalizada para contactar a estos inversores automáticamente por LinkedIn?"
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error formatting search results: {e}")
+            return "Encontré varios inversores interesantes. ¿Te gustaría ver los detalles?"
+
+# Instancia global del chat mejorado
+enhanced_chat = EnhancedChatSystem()
+
+# ==========================================
+# ENDPOINTS
+# ==========================================
+
+@app.get("/")
+async def root():
+    return {"message": "0Bullshit API - AI Investor Matching Platform"}
+
+@app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    services = {}
-    
-    # Check Supabase
-    try:
-        result = db.supabase.table("users").select("id").limit(1).execute()
-        services["supabase"] = "healthy"
-    except Exception as e:
-        logger.error(f"Supabase health check failed: {e}")
-        services["supabase"] = "unhealthy"
-    
-    # Check Gemini API
-    try:
-        test_response = judge.model.generate_content("Test connection")
-        services["gemini"] = "healthy" if test_response else "unhealthy"
-    except Exception as e:
-        logger.error(f"Gemini health check failed: {e}")
-        services["gemini"] = "unhealthy"
-    
-    # Check Unipile (if configured)
-    try:
-        from integrations.unipile_client import unipile_client
-        if unipile_client and unipile_client.api_key:
-            # Test simple API call
-            accounts = await unipile_client.get_accounts()
-            services["unipile"] = "healthy"
-        else:
-            services["unipile"] = "not_configured"
-    except Exception as e:
-        logger.error(f"Unipile health check failed: {e}")
-        services["unipile"] = "unhealthy"
-    
-    overall_status = "healthy" if all(s in ["healthy", "not_configured"] for s in services.values()) else "degraded"
-    
-    return HealthCheck(
-        status=overall_status,
-        timestamp=datetime.now(),
-        services=services
-    )
-
-# ==========================================
-# PROJECT ENDPOINTS
-# ==========================================
-
-@app.post("/api/v1/projects", response_model=Project)
-async def create_project(
-    project_data: ProjectCreate,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Crear nuevo proyecto"""
-    try:
-        project = await db.create_project(current_user, project_data)
-        logger.info(f"Project created: {project.id} by user {current_user}")
-        return project
-    except Exception as e:
-        logger.error(f"Error creating project: {e}")
-        raise HTTPException(status_code=500, detail="Error creating project")
-
-@app.get("/api/v1/projects", response_model=List[Project])
-async def get_user_projects(current_user: UUID = Depends(get_current_user)):
-    """Obtener todos los proyectos del usuario"""
-    try:
-        projects = await db.get_user_projects(current_user)
-        return projects
-    except Exception as e:
-        logger.error(f"Error getting projects: {e}")
-        raise HTTPException(status_code=500, detail="Error getting projects")
-
-@app.get("/api/v1/projects/{project_id}", response_model=Project)
-async def get_project(
-    project_id: UUID,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Obtener proyecto específico"""
-    try:
-        project = await db.get_project(project_id, current_user)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        return project
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting project: {e}")
-        raise HTTPException(status_code=500, detail="Error getting project")
-
-@app.get("/api/v1/projects/{project_id}/completeness", response_model=CompletenessResponse)
-async def get_project_completeness(
-    project_id: UUID,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Obtener análisis de completitud del proyecto"""
-    try:
-        completeness = await chat_system.get_project_completeness(project_id, current_user)
-        return completeness
-    except Exception as e:
-        logger.error(f"Error getting completeness: {e}")
-        raise HTTPException(status_code=500, detail="Error analyzing project completeness")
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 # ==========================================
 # CHAT ENDPOINTS
 # ==========================================
 
-@app.post("/api/v1/chat/welcome-message/{project_id}", response_model=WelcomeMessage)
-async def generate_welcome_message(
-    project_id: UUID,
+@app.post("/api/v1/chat", response_model=ChatResponse)
+async def chat(
+    chat_data: ChatMessage,
     current_user: UUID = Depends(get_current_user)
 ):
-    """Generar mensaje de bienvenida personalizado"""
-    try:
-        # Obtener proyecto
-        project = await db.get_project(project_id, current_user)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        
-        # Verificar si es primera vez
-        user_projects = await db.get_user_projects(current_user)
-        is_first_time = len(user_projects) <= 1
-        
-        # Generar mensaje
-        welcome_msg = await welcome_system.generate_welcome_message(
-            project, current_user, is_first_time
-        )
-        
-        # Guardar como conversación
-        welcome_conversation = ChatResponse(
-            id=uuid4(),
-            project_id=project_id,
-            role="assistant",
-            content=welcome_msg.message,
-            ai_extractions={"welcome_type": welcome_msg.message_type},
-            created_at=datetime.now()
-        )
-        await db.save_conversation(welcome_conversation)
-        
-        return welcome_msg
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error generating welcome message: {e}")
-        raise HTTPException(status_code=500, detail="Error generating welcome message")
+    """
+    Endpoint principal de chat con AI integrado
+    """
+    return await enhanced_chat.process_chat_message(
+        user_id=current_user,
+        message=chat_data.message,
+        conversation_id=chat_data.conversation_id,
+        project_id=chat_data.project_id
+    )
 
-@app.post("/api/v1/chat/message", response_model=ChatResponse)
-async def send_chat_message(
-    message: ChatMessage,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Enviar mensaje de chat"""
+@app.get("/api/v1/conversations")
+async def get_conversations(current_user: UUID = Depends(get_current_user)):
+    """
+    Obtiene las conversaciones del usuario
+    """
     try:
-        # Verificar que el proyecto pertenece al usuario
-        project = await db.get_project(message.project_id, current_user)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
+        query = db.supabase.table("conversations")\
+            .select("*")\
+            .eq("user_id", str(current_user))\
+            .order("updated_at", desc=True)\
+            .execute()
         
-        # Procesar mensaje
-        response, search_results = await chat_system.process_message(
-            message.content,
-            message.project_id,
-            current_user,
-            websocket_callback=lambda msg: ws_manager.send_message(
-                f"{current_user}_{message.project_id}", msg
-            )
-        )
+        return {"conversations": query.data if query.data else []}
         
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing chat message: {e}")
-        raise HTTPException(status_code=500, detail="Error processing message")
-
-@app.get("/api/v1/chat/conversations/{project_id}", response_model=List[ChatResponse])
-async def get_conversation_history(
-    project_id: UUID,
-    limit: int = 50,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Obtener historial de conversación"""
-    try:
-        # Verificar proyecto
-        project = await db.get_project(project_id, current_user)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        
-        # Obtener conversaciones
-        conversations = await db.get_conversations(project_id, limit)
-        return conversations
-        
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error getting conversations: {e}")
-        raise HTTPException(status_code=500, detail="Error getting conversation history")
+        raise HTTPException(status_code=500, detail="Error retrieving conversations")
 
-@app.get("/api/v1/chat/conversations", response_model=ConversationList)
-async def get_conversation_list(current_user: UUID = Depends(get_current_user)):
-    """Obtener lista de conversaciones (como ChatGPT)"""
+@app.get("/api/v1/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: str,
+    current_user: UUID = Depends(get_current_user)
+):
+    """
+    Obtiene los mensajes de una conversación
+    """
     try:
-        conversations = await db.get_conversation_titles(current_user)
-        return ConversationList(
-            conversations=conversations,
-            total=len(conversations)
-        )
+        # Verificar que la conversación pertenece al usuario
+        conv_query = db.supabase.table("conversations")\
+            .select("*")\
+            .eq("id", conversation_id)\
+            .eq("user_id", str(current_user))\
+            .execute()
+        
+        if not conv_query.data:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        # Obtener mensajes
+        messages_query = db.supabase.table("messages")\
+            .select("*")\
+            .eq("conversation_id", conversation_id)\
+            .order("created_at", desc=False)\
+            .execute()
+        
+        return {"messages": messages_query.data if messages_query.data else []}
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting conversation list: {e}")
-        raise HTTPException(status_code=500, detail="Error getting conversation list")
+        logger.error(f"Error getting conversation messages: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving messages")
+
+# ==========================================
+# PROJECTS ENDPOINTS
+# ==========================================
+
+@app.post("/api/v1/projects")
+async def create_project(
+    project_data: ProjectCreate,
+    current_user: UUID = Depends(get_current_user)
+):
+    """
+    Crea un nuevo proyecto
+    """
+    try:
+        project_id = str(uuid4())
+        project_dict = {
+            "id": project_id,
+            "user_id": str(current_user),
+            "name": project_data.name,
+            "description": project_data.description,
+            "stage": project_data.stage,
+            "category": project_data.category,
+            "business_model": project_data.business_model,
+            "target_market": project_data.target_market,
+            "funding_amount": project_data.funding_amount,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        result = db.supabase.table("projects").insert(project_dict).execute()
+        
+        if result.data:
+            return {"message": "Project created successfully", "project": result.data[0]}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create project")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating project: {e}")
+        raise HTTPException(status_code=500, detail="Error creating project")
+
+@app.get("/api/v1/projects")
+async def get_user_projects(current_user: UUID = Depends(get_current_user)):
+    """
+    Obtiene los proyectos del usuario
+    """
+    try:
+        query = db.supabase.table("projects")\
+            .select("*")\
+            .eq("user_id", str(current_user))\
+            .order("created_at", desc=True)\
+            .execute()
+        
+        return {"projects": query.data if query.data else []}
+        
+    except Exception as e:
+        logger.error(f"Error getting user projects: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving projects")
 
 # ==========================================
 # SEARCH ENDPOINTS
@@ -303,479 +582,94 @@ async def get_conversation_list(current_user: UUID = Depends(get_current_user)):
 
 @app.post("/api/v1/search/investors")
 async def search_investors(
-    project_id: UUID,
-    search_type: str = "hybrid",
-    stage_filter: Optional[List[str]] = None,
-    category_filter: Optional[List[str]] = None,
-    limit: int = 15,
+    search_data: SearchRequest,
     current_user: UUID = Depends(get_current_user)
 ):
-    """Buscar inversores (requiere plan Pro+)"""
+    """
+    Busca inversores para un proyecto específico
+    """
     try:
-        # Verificar proyecto
-        project = await db.get_project(project_id, current_user)
-        if not project:
+        # Verificar que el proyecto pertenece al usuario
+        project_query = db.supabase.table("projects")\
+            .select("*")\
+            .eq("id", search_data.project_id)\
+            .eq("user_id", str(current_user))\
+            .execute()
+        
+        if not project_query.data:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Verificar plan del usuario
-        user = await db.get_user_by_id(current_user)
-        if not user:
+        project_data = project_query.data[0]
+        
+        # Verificar créditos del usuario
+        user_query = db.supabase.table("users")\
+            .select("credits, plan")\
+            .eq("id", str(current_user))\
+            .execute()
+        
+        if not user_query.data:
             raise HTTPException(status_code=404, detail="User not found")
         
-        user_plan = user.get("plan", "free")
-        if user_plan == "free":
-            raise HTTPException(
-                status_code=403,
-                detail="Investor search requires Pro or Outreach plan"
+        user_credits = user_query.data[0].get("credits", 0)
+        if user_credits < 50:  # Costo de búsqueda
+            raise HTTPException(status_code=402, detail="Insufficient credits")
+        
+        # Callback para WebSocket updates
+        async def websocket_callback(progress_data):
+            await manager.send_personal_message(
+                json.dumps({"type": "search_progress", "data": progress_data}),
+                str(current_user)
             )
         
-        # Verificar créditos
-        required_credits = 1000
-        current_credits = user.get("credits", 0)
-        if current_credits < required_credits:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Insufficient credits. Required: {required_credits}, Available: {current_credits}"
-            )
-        
-        # Calcular completitud
-        completeness = await chat_system.get_project_completeness(project_id, current_user)
-        
-        # Ejecutar búsqueda
-        results, metadata = await investor_search_engine.search_investors(
-            project_data=project.project_data,
-            completeness_score=completeness.overall_score,
-            search_type=search_type,
-            limit=limit,
-            websocket_callback=lambda msg: ws_manager.send_message(
-                f"{current_user}_{project_id}", msg
-            )
+        # Realizar búsqueda
+        search_results, metadata = await investor_search_engine.search_investors(
+            project_data=project_data,
+            completeness_score=75.0,  # Calcular dinámicamente
+            search_type=search_data.search_type,
+            limit=search_data.limit,
+            websocket_callback=websocket_callback
         )
         
         # Deducir créditos
-        await db.deduct_user_credits(current_user, required_credits)
-        
-        # Guardar resultados para el usuario
-        await db.save_search_results(current_user, project_id, "investors", results, metadata)
-        
-        logger.info(f"Investor search completed for user {current_user}: {len(results)} results")
+        await db.deduct_user_credits(current_user, metadata.get("credits_used", 50))
         
         return {
-            "results": results,
-            "total_found": metadata["total_found"],
-            "search_metadata": metadata
+            "results": search_results,
+            "metadata": metadata,
+            "credits_used": metadata.get("credits_used", 50)
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Investor search error: {e}")
-        raise HTTPException(status_code=500, detail="Investor search failed")
-
-@app.post("/api/v1/search/companies")
-async def search_companies(
-    project_id: UUID,
-    query: str,
-    category: Optional[str] = None,
-    limit: int = 10,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Buscar empresas especializadas"""
-    try:
-        # Verificar proyecto
-        project = await db.get_project(project_id, current_user)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        
-        # Verificar créditos
-        user = await db.get_user_by_id(current_user)
-        required_credits = 250
-        current_credits = user.get("credits", 0)
-        if current_credits < required_credits:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Insufficient credits. Required: {required_credits}, Available: {current_credits}"
-            )
-        
-        # Búsqueda básica de empresas (implementación simplificada)
-        # TODO: Implementar búsqueda completa de empresas con algoritmo de relevancia
-        
-        # Buscar en base de datos de empresas
-        search_terms = query.lower().split()
-        
-        companies_query = db.supabase.table("companies").select("*")
-        
-        # Filtrar por términos de búsqueda
-        for term in search_terms:
-            companies_query = companies_query.or_(
-                f"nombre.ilike.%{term}%,"
-                f"descripcion_corta.ilike.%{term}%,"
-                f"sector_categorias.ilike.%{term}%,"
-                f"keywords_generales.ilike.%{term}%"
-            )
-        
-        # Aplicar filtro de categoría si se proporciona
-        if category:
-            companies_query = companies_query.ilike("sector_categorias", f"%{category}%")
-        
-        result = companies_query.limit(limit).execute()
-        companies = result.data or []
-        
-        # Procesar resultados
-        processed_companies = []
-        for company in companies:
-            processed_company = {
-                "nombre": company.get("nombre", ""),
-                "descripcion_corta": company.get("descripcion_corta", ""),
-                "web_empresa": company.get("web_empresa", ""),
-                "correo": company.get("correo", ""),
-                "telefono": company.get("telefono", ""),
-                "sector_categorias": company.get("sector_categorias", ""),
-                "ubicacion_general": company.get("ubicacion_general", ""),
-                "relevance_score": 85.0  # Placeholder - implementar scoring real
-            }
-            processed_companies.append(processed_company)
-        
-        # Deducir créditos
-        await db.deduct_user_credits(current_user, required_credits)
-        
-        # Guardar resultados
-        search_metadata = {
-            "query": query,
-            "category": category,
-            "total_found": len(processed_companies),
-            "query_time_ms": 500  # Placeholder
-        }
-        
-        await db.save_search_results(current_user, project_id, "companies", processed_companies, search_metadata)
-        
-        logger.info(f"Company search completed for user {current_user}: {len(processed_companies)} results")
-        
-        return {
-            "results": processed_companies,
-            "total_found": len(processed_companies),
-            "search_metadata": search_metadata
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Company search error: {e}")
-        raise HTTPException(status_code=500, detail="Company search failed")
+        logger.error(f"Error searching investors: {e}")
+        raise HTTPException(status_code=500, detail="Error performing search")
 
 # ==========================================
-# LINKEDIN ACCOUNT ENDPOINTS
+# WEBSOCKET ENDPOINTS
 # ==========================================
 
-@app.get("/api/v1/linkedin/accounts")
-async def get_linkedin_accounts(current_user: UUID = Depends(get_current_user)):
-    """Obtener cuentas de LinkedIn del usuario"""
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    """
+    WebSocket endpoint para actualizaciones en tiempo real
+    """
+    await manager.connect(websocket, user_id)
     try:
-        accounts = await db.get_user_linkedin_accounts(current_user)
-        return {
-            "success": True,
-            "accounts": accounts,
-            "total": len(accounts)
-        }
-    except Exception as e:
-        logger.error(f"Error getting LinkedIn accounts: {e}")
-        raise HTTPException(status_code=500, detail="Error getting LinkedIn accounts")
-
-@app.post("/api/v1/linkedin/connect")
-async def connect_linkedin_account(
-    success_url: str,
-    failure_url: str,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Iniciar proceso de conexión de LinkedIn"""
-    try:
-        from integrations.unipile_client import unipile_client
-        
-        if not unipile_client:
-            raise HTTPException(status_code=503, detail="LinkedIn integration not available")
-        
-        # Crear webhook URL (deberías usar tu dominio real)
-        base_url = os.getenv("BASE_URL", "http://localhost:8000")
-        notify_url = f"{base_url}/api/v1/webhooks/linkedin/auth-success"
-        
-        # Crear link de autenticación
-        auth_data = await unipile_client.create_hosted_auth_link(
-            user_id=str(current_user),
-            success_url=success_url,
-            failure_url=failure_url,
-            notify_url=notify_url
-        )
-        
-        return {
-            "success": True,
-            "auth_url": auth_data["url"],
-            "message": "Please visit the auth_url to connect your LinkedIn account"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error connecting LinkedIn account: {e}")
-        raise HTTPException(status_code=500, detail="Error connecting LinkedIn account")
-
-# ==========================================
-# WEBSOCKET ENDPOINT
-# ==========================================
-
-@app.websocket("/ws/chat/{project_id}")
-async def websocket_chat(websocket: WebSocket, project_id: UUID):
-    """WebSocket para chat en tiempo real"""
-    
-    # Obtener user_id del query param o token
-    token = websocket.query_params.get("token")
-    if not token:
-        await websocket.close(code=4001, reason="Missing authentication token")
-        return
-    
-    try:
-        from api.utils import decode_jwt_token
-        user_payload = decode_jwt_token(token)
-        user_id = UUID(user_payload.get("sub"))
-    except Exception:
-        await websocket.close(code=4001, reason="Invalid authentication token")
-        return
-    
-    # Verificar proyecto
-    try:
-        project = await db.get_project(project_id, user_id)
-        if not project:
-            await websocket.close(code=4004, reason="Project not found")
-            return
-    except Exception:
-        await websocket.close(code=4000, reason="Error verifying project")
-        return
-    
-    # Conectar WebSocket
-    client_id = f"{user_id}_{project_id}"
-    await ws_manager.connect(websocket, client_id)
-    
-    try:
-        # Mantener conexión viva
         while True:
-            try:
-                # Esperar por mensajes del cliente (keepalive)
-                message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                
-                # Echo del mensaje para keepalive
-                await websocket.send_text(json.dumps({
-                    "type": "keepalive",
-                    "timestamp": datetime.now().isoformat()
-                }))
-                
-            except asyncio.TimeoutError:
-                # Enviar ping
-                await websocket.send_text(json.dumps({"type": "ping"}))
-                
+            # Mantener conexión viva
+            data = await websocket.receive_text()
+            
+            # Echo para ping/pong
+            if data == "ping":
+                await websocket.send_text("pong")
+            
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for {client_id}")
+        manager.disconnect(user_id)
     except Exception as e:
-        logger.error(f"WebSocket error for {client_id}: {e}")
-    finally:
-        ws_manager.disconnect(client_id)
-
-# ==========================================
-# USER ENDPOINTS
-# ==========================================
-
-@app.get("/api/v1/user/profile", response_model=UserProfile)
-async def get_user_profile(current_user: UUID = Depends(get_current_user)):
-    """Obtener perfil del usuario"""
-    try:
-        profile = await db.get_user_profile(current_user)
-        if not profile:
-            raise HTTPException(status_code=404, detail="User not found")
-        return profile
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting user profile: {e}")
-        raise HTTPException(status_code=500, detail="Error getting user profile")
-
-# ==========================================
-# ADMIN/DEBUG ENDPOINTS
-# ==========================================
-
-@app.post("/api/v1/admin/force-librarian-analysis/{project_id}")
-async def force_librarian_analysis(
-    project_id: UUID,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Forzar análisis del bibliotecario (para testing)"""
-    try:
-        # Obtener conversaciones
-        conversations = await db.get_conversations(project_id, limit=10)
-        conversation_texts = [conv.content for conv in conversations]
-        
-        # Forzar análisis
-        result = await librarian.force_analysis(project_id, current_user, conversation_texts)
-        
-        return ApiResponse(
-            success=True,
-            message="Librarian analysis completed",
-            data=result.dict() if result else None
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in force librarian analysis: {e}")
-        raise HTTPException(status_code=500, detail="Error in librarian analysis")
-
-@app.get("/api/v1/admin/judge-analysis/{project_id}")
-async def debug_judge_analysis(
-    project_id: UUID,
-    message: str,
-    current_user: UUID = Depends(get_current_user)
-):
-    """Debug: Obtener análisis del juez sin procesar mensaje"""
-    try:
-        project = await db.get_project(project_id, current_user)
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        
-        decision = await judge.analyze_user_intent(message, project, [])
-        
-        return ApiResponse(
-            success=True,
-            message="Judge analysis completed",
-            data=decision.dict()
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in judge analysis: {e}")
-        raise HTTPException(status_code=500, detail="Error in judge analysis")
-
-# ==========================================
-# FEATURE FLAGS ENDPOINT
-# ==========================================
-
-@app.get("/api/v1/features")
-async def get_feature_flags(current_user: UUID = Depends(get_current_user)):
-    """Obtener feature flags para el usuario"""
-    try:
-        from api.utils import is_feature_enabled
-        
-        features = {
-            "linkedin_outreach": is_feature_enabled("linkedin_outreach", current_user),
-            "ai_message_generation": is_feature_enabled("ai_message_generation", current_user),
-            "advanced_analytics": is_feature_enabled("advanced_analytics", current_user),
-            "auto_follow_up": is_feature_enabled("auto_follow_up", current_user)
-        }
-        
-        return {
-            "success": True,
-            "features": features
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting feature flags: {e}")
-        raise HTTPException(status_code=500, detail="Error getting feature flags")
-
-# ==========================================
-# ERROR HANDLERS
-# ==========================================
-
-@app.exception_handler(ValueError)
-async def value_error_handler(request, exc):
-    return JSONResponse(
-        status_code=400,
-        content={"detail": str(exc)}
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {exc}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"}
-    )
-
-# ==========================================
-# STARTUP/SHUTDOWN EVENTS
-# ==========================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Eventos de inicio"""
-    logger.info("🚀 0Bullshit Chat API starting up...")
-    
-    # Verificar conexiones
-    try:
-        # Test Supabase
-        db.supabase.table("users").select("id").limit(1).execute()
-        logger.info("✅ Supabase connection OK")
-    except Exception as e:
-        logger.error(f"❌ Supabase connection failed: {e}")
-    
-    try:
-        # Test Gemini
-        test_response = judge.model.generate_content("Test")
-        logger.info("✅ Gemini API connection OK")
-    except Exception as e:
-        logger.error(f"❌ Gemini API connection failed: {e}")
-    
-    try:
-        # Test Unipile (if configured)
-        from integrations.unipile_client import unipile_client
-        if unipile_client and unipile_client.api_key:
-            accounts = await unipile_client.get_accounts()
-            logger.info("✅ Unipile connection OK")
-        else:
-            logger.info("⚠️ Unipile not configured - LinkedIn features disabled")
-    except Exception as e:
-        logger.error(f"❌ Unipile connection failed: {e}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Eventos de cierre"""
-    logger.info("🛑 0Bullshit Chat API shutting down...")
-    
-    # Cerrar conexiones WebSocket
-    for client_id in list(ws_manager.active_connections.keys()):
-        ws_manager.disconnect(client_id)
-
-# ==========================================
-# INCLUDE ROUTERS
-# ==========================================
-
-# Incluir todos los routers
-app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
-app.include_router(payments_router, prefix="/api/v1/payments", tags=["Payments"])
-app.include_router(linkedin_router, prefix="/api/v1", tags=["LinkedIn"])
-app.include_router(outreach_router, prefix="/api/v1", tags=["Outreach"])
-app.include_router(webhooks_router, prefix="/api/v1", tags=["Webhooks"])
-app.include_router(campaigns_router, prefix="/api/v1", tags=["Campaigns"])
-
-# ==========================================
-# ROOT ENDPOINT
-# ==========================================
-
-@app.get("/")
-async def root():
-    """Endpoint raíz"""
-    return {
-        "name": "0Bullshit Chat API",
-        "version": "2.0.0",
-        "description": "API para el sistema de chat con IA especializado en startups con outreach automatizado",
-        "docs": "/docs",
-        "health": "/health",
-        "features": [
-            "AI Chat System",
-            "Investor Search",
-            "Company Search", 
-            "Y-Combinator Mentoring",
-            "LinkedIn Outreach",
-            "Campaign Management",
-            "Real-time Analytics"
-        ]
-    }
+        logger.error(f"WebSocket error for user {user_id}: {e}")
+        manager.disconnect(user_id)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "api:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=os.getenv("DEBUG", "False").lower() == "true"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)
