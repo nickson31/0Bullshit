@@ -22,15 +22,18 @@ from chat.chat import chat_system
 from chat.welcome import welcome_system
 from chat.judge import judge
 from chat.librarian import librarian
+from investors.investors import investor_search_engine
 
 # Imports de utilidades
 from api.utils import get_current_user
 
 # Imports de routers
+from api.auth import router as auth_router
 from api.linkedin import router as linkedin_router
 from api.outreach import router as outreach_router
 from api.webhooks import router as webhooks_router
 from api.campaigns import router as campaigns_router
+from payments.payments import router as payments_router
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -293,6 +296,172 @@ async def get_conversation_list(current_user: UUID = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error getting conversation list: {e}")
         raise HTTPException(status_code=500, detail="Error getting conversation list")
+
+# ==========================================
+# SEARCH ENDPOINTS
+# ==========================================
+
+@app.post("/api/v1/search/investors")
+async def search_investors(
+    project_id: UUID,
+    search_type: str = "hybrid",
+    stage_filter: Optional[List[str]] = None,
+    category_filter: Optional[List[str]] = None,
+    limit: int = 15,
+    current_user: UUID = Depends(get_current_user)
+):
+    """Buscar inversores (requiere plan Pro+)"""
+    try:
+        # Verificar proyecto
+        project = await db.get_project(project_id, current_user)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Verificar plan del usuario
+        user = await db.get_user_by_id(current_user)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_plan = user.get("plan", "free")
+        if user_plan == "free":
+            raise HTTPException(
+                status_code=403,
+                detail="Investor search requires Pro or Outreach plan"
+            )
+        
+        # Verificar créditos
+        required_credits = 1000
+        current_credits = user.get("credits", 0)
+        if current_credits < required_credits:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Insufficient credits. Required: {required_credits}, Available: {current_credits}"
+            )
+        
+        # Calcular completitud
+        completeness = await chat_system.get_project_completeness(project_id, current_user)
+        
+        # Ejecutar búsqueda
+        results, metadata = await investor_search_engine.search_investors(
+            project_data=project.project_data,
+            completeness_score=completeness.overall_score,
+            search_type=search_type,
+            limit=limit,
+            websocket_callback=lambda msg: ws_manager.send_message(
+                f"{current_user}_{project_id}", msg
+            )
+        )
+        
+        # Deducir créditos
+        await db.deduct_user_credits(current_user, required_credits)
+        
+        # Guardar resultados para el usuario
+        await db.save_search_results(current_user, project_id, "investors", results, metadata)
+        
+        logger.info(f"Investor search completed for user {current_user}: {len(results)} results")
+        
+        return {
+            "results": results,
+            "total_found": metadata["total_found"],
+            "search_metadata": metadata
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Investor search error: {e}")
+        raise HTTPException(status_code=500, detail="Investor search failed")
+
+@app.post("/api/v1/search/companies")
+async def search_companies(
+    project_id: UUID,
+    query: str,
+    category: Optional[str] = None,
+    limit: int = 10,
+    current_user: UUID = Depends(get_current_user)
+):
+    """Buscar empresas especializadas"""
+    try:
+        # Verificar proyecto
+        project = await db.get_project(project_id, current_user)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Verificar créditos
+        user = await db.get_user_by_id(current_user)
+        required_credits = 250
+        current_credits = user.get("credits", 0)
+        if current_credits < required_credits:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Insufficient credits. Required: {required_credits}, Available: {current_credits}"
+            )
+        
+        # Búsqueda básica de empresas (implementación simplificada)
+        # TODO: Implementar búsqueda completa de empresas con algoritmo de relevancia
+        
+        # Buscar en base de datos de empresas
+        search_terms = query.lower().split()
+        
+        companies_query = db.supabase.table("companies").select("*")
+        
+        # Filtrar por términos de búsqueda
+        for term in search_terms:
+            companies_query = companies_query.or_(
+                f"nombre.ilike.%{term}%,"
+                f"descripcion_corta.ilike.%{term}%,"
+                f"sector_categorias.ilike.%{term}%,"
+                f"keywords_generales.ilike.%{term}%"
+            )
+        
+        # Aplicar filtro de categoría si se proporciona
+        if category:
+            companies_query = companies_query.ilike("sector_categorias", f"%{category}%")
+        
+        result = companies_query.limit(limit).execute()
+        companies = result.data or []
+        
+        # Procesar resultados
+        processed_companies = []
+        for company in companies:
+            processed_company = {
+                "nombre": company.get("nombre", ""),
+                "descripcion_corta": company.get("descripcion_corta", ""),
+                "web_empresa": company.get("web_empresa", ""),
+                "correo": company.get("correo", ""),
+                "telefono": company.get("telefono", ""),
+                "sector_categorias": company.get("sector_categorias", ""),
+                "ubicacion_general": company.get("ubicacion_general", ""),
+                "relevance_score": 85.0  # Placeholder - implementar scoring real
+            }
+            processed_companies.append(processed_company)
+        
+        # Deducir créditos
+        await db.deduct_user_credits(current_user, required_credits)
+        
+        # Guardar resultados
+        search_metadata = {
+            "query": query,
+            "category": category,
+            "total_found": len(processed_companies),
+            "query_time_ms": 500  # Placeholder
+        }
+        
+        await db.save_search_results(current_user, project_id, "companies", processed_companies, search_metadata)
+        
+        logger.info(f"Company search completed for user {current_user}: {len(processed_companies)} results")
+        
+        return {
+            "results": processed_companies,
+            "total_found": len(processed_companies),
+            "search_metadata": search_metadata
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Company search error: {e}")
+        raise HTTPException(status_code=500, detail="Company search failed")
 
 # ==========================================
 # LINKEDIN ACCOUNT ENDPOINTS
@@ -571,6 +740,8 @@ async def shutdown_event():
 # ==========================================
 
 # Incluir todos los routers
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(payments_router, prefix="/api/v1/payments", tags=["Payments"])
 app.include_router(linkedin_router, prefix="/api/v1", tags=["LinkedIn"])
 app.include_router(outreach_router, prefix="/api/v1", tags=["Outreach"])
 app.include_router(webhooks_router, prefix="/api/v1", tags=["Webhooks"])
