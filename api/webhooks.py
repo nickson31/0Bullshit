@@ -10,14 +10,14 @@ from fastapi.responses import JSONResponse
 from database.database import db
 from campaigns.message_generator import message_personalizer
 
-router = APIRouter()
+webhooks_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ==========================================
 # WEBHOOK HANDLERS
 # ==========================================
 
-@router.post("/webhooks/unipile")
+@webhooks_router.post("/webhooks/unipile")
 async def unipile_webhook(request: Request, background_tasks: BackgroundTasks):
     """Webhook principal para eventos de Unipile"""
     try:
@@ -45,7 +45,7 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks):
             content={"ok": False, "error": str(e)}
         )
 
-@router.post("/webhooks/linkedin/auth-success")
+@webhooks_router.post("/webhooks/linkedin/auth-success")
 async def linkedin_auth_success(request: Request):
     """Webhook para autenticación exitosa de LinkedIn"""
     try:
@@ -77,7 +77,7 @@ async def linkedin_auth_success(request: Request):
             content={"ok": False, "error": str(e)}
         )
 
-@router.post("/webhooks/linkedin/auth-failure")
+@webhooks_router.post("/webhooks/linkedin/auth-failure")
 async def linkedin_auth_failure(request: Request):
     """Webhook para fallo en autenticación de LinkedIn"""
     try:
@@ -450,7 +450,7 @@ async def pause_campaigns_for_account(account_id: str):
 # DEBUGGING ENDPOINTS
 # ==========================================
 
-@router.post("/webhooks/test")
+@webhooks_router.post("/webhooks/test")
 async def test_webhook(request: Request):
     """Endpoint de prueba para webhooks"""
     try:
@@ -470,7 +470,7 @@ async def test_webhook(request: Request):
             content={"ok": False, "error": str(e)}
         )
 
-@router.get("/webhooks/status")
+@webhooks_router.get("/webhooks/status")
 async def webhook_status():
     """Estado de los webhooks"""
     try:

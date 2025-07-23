@@ -4,7 +4,7 @@ from typing import List, Optional
 import os
 import requests
 
-router = APIRouter()
+outreach_router = APIRouter()
 
 UNIPILE_API_URL = os.getenv("UNIPILE_API_URL")
 UNIPILE_API_KEY = os.getenv("UNIPILE_API_KEY")
@@ -15,7 +15,7 @@ class OutreachStartRequest(BaseModel):
     account_id: str  # LinkedIn account_id conectado en Unipile
     message: str
 
-@router.post("/outreach/start")
+@outreach_router.post("/outreach/start")
 def start_outreach(req: OutreachStartRequest):
     results = []
     for target_id in req.targets:

@@ -22,7 +22,7 @@ except ImportError:
     campaign_manager = None
     message_personalizer = None
 
-router = APIRouter()
+campaigns_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ==========================================
@@ -74,7 +74,7 @@ class CampaignStats(BaseModel):
 # ENDPOINTS DE CAMPAÑAS
 # ==========================================
 
-@router.post("/campaigns", response_model=CampaignResponse)
+@campaigns_router.post("/campaigns", response_model=CampaignResponse)
 async def create_campaign(
     campaign_data: CampaignCreate,
     current_user: UUID = Depends(get_current_user)
@@ -118,7 +118,7 @@ async def create_campaign(
         logger.error(f"Error creating campaign: {e}")
         raise HTTPException(status_code=500, detail="Error creating campaign")
 
-@router.get("/campaigns", response_model=List[CampaignResponse])
+@campaigns_router.get("/campaigns", response_model=List[CampaignResponse])
 async def get_user_campaigns(current_user: UUID = Depends(get_current_user)):
     """Obtener todas las campañas del usuario"""
     try:
@@ -128,7 +128,7 @@ async def get_user_campaigns(current_user: UUID = Depends(get_current_user)):
         logger.error(f"Error getting campaigns: {e}")
         raise HTTPException(status_code=500, detail="Error getting campaigns")
 
-@router.get("/campaigns/{campaign_id}", response_model=CampaignResponse)
+@campaigns_router.get("/campaigns/{campaign_id}", response_model=CampaignResponse)
 async def get_campaign(
     campaign_id: UUID,
     current_user: UUID = Depends(get_current_user)
@@ -145,7 +145,7 @@ async def get_campaign(
         logger.error(f"Error getting campaign: {e}")
         raise HTTPException(status_code=500, detail="Error getting campaign")
 
-@router.put("/campaigns/{campaign_id}", response_model=CampaignResponse)
+@campaigns_router.put("/campaigns/{campaign_id}", response_model=CampaignResponse)
 async def update_campaign(
     campaign_id: UUID,
     updates: CampaignUpdate,
@@ -173,7 +173,7 @@ async def update_campaign(
         logger.error(f"Error updating campaign: {e}")
         raise HTTPException(status_code=500, detail="Error updating campaign")
 
-@router.delete("/campaigns/{campaign_id}")
+@campaigns_router.delete("/campaigns/{campaign_id}")
 async def delete_campaign(
     campaign_id: UUID,
     current_user: UUID = Depends(get_current_user)
@@ -203,7 +203,7 @@ async def delete_campaign(
 # GESTIÓN DE TARGETS
 # ==========================================
 
-@router.post("/campaigns/{campaign_id}/targets")
+@campaigns_router.post("/campaigns/{campaign_id}/targets")
 async def add_targets_to_campaign(
     campaign_id: UUID,
     investor_ids: List[UUID],
@@ -247,7 +247,7 @@ async def add_targets_to_campaign(
         logger.error(f"Error adding targets: {e}")
         raise HTTPException(status_code=500, detail="Error adding targets")
 
-@router.get("/campaigns/{campaign_id}/targets", response_model=List[TargetResponse])
+@campaigns_router.get("/campaigns/{campaign_id}/targets", response_model=List[TargetResponse])
 async def get_campaign_targets(
     campaign_id: UUID,
     current_user: UUID = Depends(get_current_user)
@@ -267,7 +267,7 @@ async def get_campaign_targets(
         logger.error(f"Error getting targets: {e}")
         raise HTTPException(status_code=500, detail="Error getting targets")
 
-@router.delete("/campaigns/{campaign_id}/targets/{target_id}")
+@campaigns_router.delete("/campaigns/{campaign_id}/targets/{target_id}")
 async def remove_target_from_campaign(
     campaign_id: UUID,
     target_id: UUID,
@@ -298,7 +298,7 @@ async def remove_target_from_campaign(
 # LANZAMIENTO Y CONTROL DE CAMPAÑAS
 # ==========================================
 
-@router.post("/campaigns/{campaign_id}/launch")
+@campaigns_router.post("/campaigns/{campaign_id}/launch")
 async def launch_campaign(
     campaign_id: UUID,
     background_tasks: BackgroundTasks,
@@ -354,7 +354,7 @@ async def launch_campaign(
         logger.error(f"Error launching campaign: {e}")
         raise HTTPException(status_code=500, detail="Error launching campaign")
 
-@router.post("/campaigns/{campaign_id}/pause")
+@campaigns_router.post("/campaigns/{campaign_id}/pause")
 async def pause_campaign(
     campaign_id: UUID,
     current_user: UUID = Depends(get_current_user)
@@ -378,7 +378,7 @@ async def pause_campaign(
         logger.error(f"Error pausing campaign: {e}")
         raise HTTPException(status_code=500, detail="Error pausing campaign")
 
-@router.post("/campaigns/{campaign_id}/resume")
+@campaigns_router.post("/campaigns/{campaign_id}/resume")
 async def resume_campaign(
     campaign_id: UUID,
     background_tasks: BackgroundTasks,
@@ -414,7 +414,7 @@ async def resume_campaign(
 # ESTADÍSTICAS Y ANALÍTICAS
 # ==========================================
 
-@router.get("/campaigns/stats", response_model=CampaignStats)
+@campaigns_router.get("/campaigns/stats", response_model=CampaignStats)
 async def get_campaign_stats(current_user: UUID = Depends(get_current_user)):
     """Obtener estadísticas generales de campañas"""
     try:
@@ -424,7 +424,7 @@ async def get_campaign_stats(current_user: UUID = Depends(get_current_user)):
         logger.error(f"Error getting campaign stats: {e}")
         raise HTTPException(status_code=500, detail="Error getting campaign stats")
 
-@router.get("/campaigns/{campaign_id}/analytics")
+@campaigns_router.get("/campaigns/{campaign_id}/analytics")
 async def get_campaign_analytics(
     campaign_id: UUID,
     current_user: UUID = Depends(get_current_user)
@@ -453,7 +453,7 @@ async def get_campaign_analytics(
 # TESTING Y PREVIEW
 # ==========================================
 
-@router.post("/campaigns/preview-message")
+@campaigns_router.post("/campaigns/preview-message")
 async def preview_personalized_message(
     template: str,
     investor_id: UUID,
@@ -493,7 +493,7 @@ async def preview_personalized_message(
         logger.error(f"Error previewing message: {e}")
         raise HTTPException(status_code=500, detail="Error previewing message")
 
-@router.post("/campaigns/{campaign_id}/test-send")
+@campaigns_router.post("/campaigns/{campaign_id}/test-send")
 async def test_send_message(
     campaign_id: UUID,
     target_id: UUID,

@@ -4,7 +4,7 @@ import os
 import requests
 from typing import Optional
 
-router = APIRouter()
+linkedin_router = APIRouter()
 
 UNIPILE_API_URL = os.getenv("UNIPILE_API_URL")  # Ej: https://apiXXX.unipile.com:XXX/api/v1
 UNIPILE_API_KEY = os.getenv("UNIPILE_API_KEY")
@@ -15,7 +15,7 @@ class ConnectLinkedInRequest(BaseModel):
     failure_url: str
     notify_url: str
 
-@router.post("/linkedin/connect")
+@linkedin_router.post("/linkedin/connect")
 def connect_linkedin(req: ConnectLinkedInRequest):
     payload = {
         "type": "create",
