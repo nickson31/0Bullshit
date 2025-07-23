@@ -558,82 +558,6 @@ class Database:
             return False
     
     # ==========================================
-    # HELPER METHODS
-    # ==========================================
-    
-    def _dict_to_project(self, data: Dict) -> Project:
-        """Convertir dict a Project model"""
-        # Parsear project_data JSON si existe
-        project_data = data.get("project_data", {})
-        if isinstance(project_data, str):
-            project_data = json.loads(project_data)
-        
-        return Project(
-            id=UUID(data["id"]),
-            user_id=UUID(data["user_id"]),
-            name=data["name"],
-            description=data.get("description"),
-            categories=data.get("categories", []),
-            stage=data.get("stage"),
-            project_data=ProjectData(**project_data) if project_data else ProjectData(),
-            context_summary=data.get("context_summary"),
-            last_context_update=datetime.fromisoformat(data["last_context_update"].replace("Z", "+00:00")) if data.get("last_context_update") else None,
-            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
-            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
-        )
-    
-    def _calculate_investor_relevance(self, investor: Dict, categories: List[str], stage: str) -> float:
-        """Calcular score de relevancia para investor"""
-        score = 0.0
-        
-        # Puntos por categorías
-        if categories:
-            categories_general = investor.get("categories_general", []) or []
-            categories_strong = investor.get("categories_strong", []) or []
-            
-            for category in categories:
-                if category in categories_strong:
-                    score += 0.3
-                elif category in categories_general:
-                    score += 0.2
-        
-        # Puntos por stage
-        if stage:
-            stages_general = investor.get("stages_general", []) or []
-            stages_strong = investor.get("stages_strong", []) or []
-            
-            if stage in stages_strong:
-                score += 0.3
-            elif stage in stages_general:
-                score += 0.2
-        
-        return min(score, 1.0)  # Máximo 1.0
-    
-    def _get_category_matches(self, investor: Dict, categories: List[str]) -> List[str]:
-        """Obtener categorías que coinciden"""
-        if not categories:
-            return []
-        
-        matches = []
-        categories_general = investor.get("categories_general", []) or []
-        categories_strong = investor.get("categories_strong", []) or []
-        
-        for category in categories:
-            if category in categories_general or category in categories_strong:
-                matches.append(category)
-        
-        return matches
-    
-    def _check_stage_match(self, investor: Dict, stage: str) -> bool:
-        """Verificar si el stage coincide"""
-        if not stage:
-            return False
-        
-        stages_general = investor.get("stages_general", []) or []
-        stages_strong = investor.get("stages_strong", []) or []
-        
-        return stage in stages_general or stage in stages_strong
-# ==========================================
     # AUTHENTICATION METHODS (NUEVOS)
     # ==========================================
     
@@ -869,6 +793,83 @@ class Database:
         except Exception as e:
             logger.error(f"Error updating Stripe customer ID: {e}")
             return False
+    
+    # ==========================================
+    # HELPER METHODS
+    # ==========================================
+    
+    def _dict_to_project(self, data: Dict) -> Project:
+        """Convertir dict a Project model"""
+        # Parsear project_data JSON si existe
+        project_data = data.get("project_data", {})
+        if isinstance(project_data, str):
+            project_data = json.loads(project_data)
+        
+        return Project(
+            id=UUID(data["id"]),
+            user_id=UUID(data["user_id"]),
+            name=data["name"],
+            description=data.get("description"),
+            categories=data.get("categories", []),
+            stage=data.get("stage"),
+            project_data=ProjectData(**project_data) if project_data else ProjectData(),
+            context_summary=data.get("context_summary"),
+            last_context_update=datetime.fromisoformat(data["last_context_update"].replace("Z", "+00:00")) if data.get("last_context_update") else None,
+            created_at=datetime.fromisoformat(data["created_at"].replace("Z", "+00:00")),
+            updated_at=datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
+        )
+    
+    def _calculate_investor_relevance(self, investor: Dict, categories: List[str], stage: str) -> float:
+        """Calcular score de relevancia para investor"""
+        score = 0.0
+        
+        # Puntos por categorías
+        if categories:
+            categories_general = investor.get("categories_general", []) or []
+            categories_strong = investor.get("categories_strong", []) or []
             
+            for category in categories:
+                if category in categories_strong:
+                    score += 0.3
+                elif category in categories_general:
+                    score += 0.2
+        
+        # Puntos por stage
+        if stage:
+            stages_general = investor.get("stages_general", []) or []
+            stages_strong = investor.get("stages_strong", []) or []
+            
+            if stage in stages_strong:
+                score += 0.3
+            elif stage in stages_general:
+                score += 0.2
+        
+        return min(score, 1.0)  # Máximo 1.0
+    
+    def _get_category_matches(self, investor: Dict, categories: List[str]) -> List[str]:
+        """Obtener categorías que coinciden"""
+        if not categories:
+            return []
+        
+        matches = []
+        categories_general = investor.get("categories_general", []) or []
+        categories_strong = investor.get("categories_strong", []) or []
+        
+        for category in categories:
+            if category in categories_general or category in categories_strong:
+                matches.append(category)
+        
+        return matches
+    
+    def _check_stage_match(self, investor: Dict, stage: str) -> bool:
+        """Verificar si el stage coincide"""
+        if not stage:
+            return False
+        
+        stages_general = investor.get("stages_general", []) or []
+        stages_strong = investor.get("stages_strong", []) or []
+        
+        return stage in stages_general or stage in stages_strong
+
 # Instancia global
 db = Database()
