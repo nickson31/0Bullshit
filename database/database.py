@@ -235,7 +235,7 @@ class Database:
     async def search_companies(self, problem_context: str, categories: List[str], limit: int = 10) -> List[CompanyResult]:
         """Buscar empresas/servicios relevantes"""
         try:
-            query = self.supabase.table("COMPANIES").select("*")
+            query = self.supabase.table("companies").select("*")
             
             # Filtrar por categorías o contexto
             if categories:
