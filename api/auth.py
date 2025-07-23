@@ -546,5 +546,9 @@ def _calculate_daily_credits_remaining(user_data: dict) -> int:
             if today > last_reset_date:
                 # Reset daily credits
                 daily_credits_used = 0
+        
+        return max(0, daily_limit - daily_credits_used)
     
-    return max(0, daily_limit - daily_credits_used)
+    except Exception as e:
+        logger.error(f"Error calculating daily credits: {e}")
+        return 0
