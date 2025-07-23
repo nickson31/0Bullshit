@@ -40,6 +40,14 @@ def check_environment():
         'JWT_SECRET_KEY'
     ]
     
+    # Variables opcionales pero recomendadas
+    optional_vars = [
+        'UNIPILE_API_KEY',
+        'UNIPILE_DSN',
+        'STRIPE_SECRET_KEY',
+        'STRIPE_WEBHOOK_SECRET'
+    ]
+    
     missing_vars = []
     for var in required_vars:
         if not os.getenv(var):
@@ -49,6 +57,20 @@ def check_environment():
         logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
         logger.error("Please check your .env file or environment configuration")
         return False
+    
+    # Check optional vars and warn if missing
+    missing_optional = []
+    for var in optional_vars:
+        if not os.getenv(var):
+            missing_optional.append(var)
+    
+    if missing_optional:
+        logger.warning(f"Optional environment variables not set: {', '.join(missing_optional)}")
+        logger.warning("Some features may be disabled:")
+        if 'UNIPILE_API_KEY' in missing_optional:
+            logger.warning("  - LinkedIn automation and outreach campaigns")
+        if 'STRIPE_SECRET_KEY' in missing_optional:
+            logger.warning("  - Stripe payments and subscriptions")
     
     return True
 

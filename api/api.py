@@ -17,7 +17,7 @@ from api.campaigns import campaigns_router
 from api.analytics import router as analytics_router
 from payments.payments import router as payments_router
 from config.settings import *
-from database.database import DatabaseManager
+from database.database import Database
 from investors.investors import investor_search_engine
 from chat.upsell_system import upsell_system
 from chat.welcome_system import welcome_system
@@ -43,7 +43,7 @@ app.add_middleware(
 )
 
 # Database instance
-db = DatabaseManager()
+db = Database()
 
 # Incluir todos los routers
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
@@ -118,7 +118,7 @@ manager = ConnectionManager()
 
 class EnhancedChatSystem:
     def __init__(self):
-        self.db = DatabaseManager()
+        self.db = Database()
         
     async def process_chat_message(
         self, 

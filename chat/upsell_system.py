@@ -9,7 +9,7 @@ import google.generativeai as genai
 from fastapi import HTTPException
 
 from config.settings import GEMINI_API_KEY
-from database.database import DatabaseManager
+from database.database import Database
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -20,7 +20,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 class UpsellSystem:
     def __init__(self):
-        self.db = DatabaseManager()
+        self.db = Database()
         self.model = genai.GenerativeModel("gemini-2.0-flash-exp")
         
         # Anti-saturation settings

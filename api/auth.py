@@ -11,7 +11,7 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 
 from config.settings import JWT_SECRET_KEY, JWT_ALGORITHM, JWT_EXPIRATION_HOURS
-from database.database import DatabaseManager
+from database.database import Database
 from models.schemas import MessageResponse
 
 # Configure logging
@@ -26,7 +26,7 @@ security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Database instance
-db = DatabaseManager()
+db = Database()
 
 # ==========================================
 # PYDANTIC MODELS

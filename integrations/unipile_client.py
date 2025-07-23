@@ -445,6 +445,63 @@ class UnipileClient:
             raise
     
     # ==========================================
+    # PERIODIC CHECKS (BACKUP FOR WEBHOOKS)
+    # ==========================================
+    
+    async def check_new_connections_periodic(self, account_id: str, last_check: datetime = None) -> List[Dict[str, Any]]:
+        """
+        Método periodic check para detectar nuevas conexiones
+        Como backup si los webhooks fallan. Según docs Unipile.
+        """
+        self._check_config()
+        
+        try:
+            # Obtener lista actual de conexiones, ordenada por más recientes
+            relations = await self.get_relations(account_id, limit=50)
+            
+            new_connections = []
+            
+            # Si no hay last_check, solo retornar las primeras 5 (más recientes)
+            if not last_check:
+                new_connections = relations[:5] if relations else []
+            else:
+                # Filtrar conexiones desde last_check
+                # Nota: LinkedIn no provee timestamp exacto, así que es una aproximación
+                new_connections = relations[:10]  # Revisar las 10 más recientes
+            
+            logger.info(f"Periodic check found {len(new_connections)} potential new connections")
+            return new_connections
+            
+        except Exception as e:
+            logger.error(f"Error in periodic connection check: {e}")
+            return []
+    
+    async def check_invitation_status_changes(self, account_id: str) -> List[Dict[str, Any]]:
+        """
+        Verificar cambios en estado de invitaciones enviadas
+        Útil para detectar aceptaciones/rechazos cuando webhooks fallan
+        """
+        self._check_config()
+        
+        try:
+            sent_invitations = await self.get_sent_invitations(account_id, limit=100)
+            
+            # Filtrar solo las que ya no están "pending" 
+            # (pueden haber sido aceptadas o rechazadas)
+            status_changes = []
+            for invitation in sent_invitations:
+                status = invitation.get("status", "")
+                if status and status.lower() != "pending":
+                    status_changes.append(invitation)
+            
+            logger.info(f"Found {len(status_changes)} invitation status changes")
+            return status_changes
+            
+        except Exception as e:
+            logger.error(f"Error checking invitation status changes: {e}")
+            return []
+
+    # ==========================================
     # RATE LIMITING Y HELPERS
     # ==========================================
     

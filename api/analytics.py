@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from api.auth import get_current_user
-from database.database import DatabaseManager
+from database.database import Database
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +47,7 @@ class UserEngagementMetrics(BaseModel):
 
 class AnalyticsManager:
     def __init__(self):
-        self.db = DatabaseManager()
+        self.db = Database()
     
     async def get_user_analytics(self, user_id: UUID, period: str = "30d") -> Dict:
         """

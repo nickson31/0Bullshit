@@ -114,6 +114,9 @@ async def process_unipile_event(event_id: UUID, payload: Dict[str, Any]):
         elif event_type == "users.invitation_accepted":
             await process_invitation_accepted_event(payload)
             
+        elif event_type == "users.new_relation":
+            await process_new_relation_event(payload)
+            
         elif event_type == "users.invitation_sent":
             await process_invitation_sent_event(payload)
             
@@ -211,6 +214,49 @@ async def process_invitation_accepted_event(payload: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Error processing invitation accepted event: {e}")
 
+async def process_new_relation_event(payload: Dict[str, Any]):
+    """Procesar nueva conexión establecida (incluye conexiones aceptadas)"""
+    try:
+        account_id = payload.get("account_id")
+        user_data = payload.get("object", {})
+        
+        # Datos del nuevo contacto según documentación Unipile
+        user_provider_id = user_data.get("user_provider_id")
+        user_public_identifier = user_data.get("user_public_identifier") 
+        user_full_name = user_data.get("user_full_name")
+        user_profile_url = user_data.get("user_profile_url")
+        
+        if not all([account_id, user_provider_id]):
+            logger.warning("Incomplete new relation data received")
+            return
+        
+        # Buscar target por LinkedIn ID o public identifier
+        target = await find_target_by_linkedin_id(user_provider_id)
+        if not target:
+            target = await find_target_by_public_identifier(user_public_identifier)
+        
+        if target:
+            # Actualizar target como conexión establecida
+            await update_target_connection_established(
+                target["id"], 
+                user_full_name, 
+                user_profile_url
+            )
+            
+            # Incrementar contador de conexiones en campaña
+            await increment_campaign_connections_count(target["campaign_id"])
+            
+            logger.info(f"New relation established for target {target['id']}: {user_full_name}")
+            
+            # Opcional: Programar mensaje de seguimiento automático
+            # await schedule_follow_up_message(target["id"], delay_hours=24)
+        else:
+            # Log para nuevas conexiones no relacionadas con campañas
+            logger.info(f"New relation established outside campaigns: {user_full_name}")
+        
+    except Exception as e:
+        logger.error(f"Error processing new relation event: {e}")
+
 async def process_invitation_sent_event(payload: Dict[str, Any]):
     """Procesar confirmación de invitación enviada"""
     try:
@@ -271,6 +317,21 @@ async def find_target_by_linkedin_id(linkedin_provider_id: str) -> Optional[Dict
         logger.error(f"Error finding target by LinkedIn ID: {e}")
         return None
 
+async def find_target_by_public_identifier(public_identifier: str) -> Optional[Dict[str, Any]]:
+    """Encontrar target por public identifier de LinkedIn"""
+    try:
+        if not public_identifier:
+            return None
+            
+        result = db.supabase.table("outreach_targets").select("*").eq(
+            "linkedin_public_identifier", public_identifier
+        ).eq("status", "sent").execute()
+        
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.error(f"Error finding target by public identifier: {e}")
+        return None
+
 async def update_target_replied(target_id: str):
     """Actualizar target como que ha respondido"""
     try:
@@ -299,6 +360,25 @@ async def update_target_accepted(target_id: str):
         
     except Exception as e:
         logger.error(f"Error updating target accepted: {e}")
+
+async def update_target_connection_established(target_id: str, full_name: str = None, profile_url: str = None):
+    """Actualizar target como conexión establecida"""
+    try:
+        update_data = {
+            "connection_established": True,
+            "connection_established_at": datetime.now().isoformat()
+        }
+        
+        # Añadir información adicional si está disponible
+        if full_name:
+            update_data["connected_name"] = full_name
+        if profile_url:
+            update_data["connected_profile_url"] = profile_url
+        
+        db.supabase.table("outreach_targets").update(update_data).eq("id", target_id).execute()
+        
+    except Exception as e:
+        logger.error(f"Error updating target connection established: {e}")
 
 async def increment_campaign_reply_count(campaign_id: str):
     """Incrementar contador de respuestas en campaña"""
@@ -331,6 +411,22 @@ async def increment_campaign_accepted_count(campaign_id: str):
             
     except Exception as e:
         logger.error(f"Error incrementing campaign accepted count: {e}")
+
+async def increment_campaign_connections_count(campaign_id: str):
+    """Incrementar contador de conexiones establecidas en campaña"""
+    try:
+        # Obtener count actual
+        campaign_result = db.supabase.table("outreach_campaigns").select("connections_count").eq("id", campaign_id).execute()
+        if campaign_result.data:
+            current_count = campaign_result.data[0].get("connections_count", 0)
+            new_count = current_count + 1
+            
+            db.supabase.table("outreach_campaigns").update({
+                "connections_count": new_count
+            }).eq("id", campaign_id).execute()
+            
+    except Exception as e:
+        logger.error(f"Error incrementing campaign connections count: {e}")
 
 async def pause_campaigns_for_account(account_id: str):
     """Pausar campañas activas para una cuenta"""
