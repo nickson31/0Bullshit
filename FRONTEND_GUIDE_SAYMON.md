@@ -7,7 +7,7 @@
 
 This document contains all the information you need to integrate the frontend with the 0Bullshit backend API. The backend is built with FastAPI and provides a comprehensive REST API with real-time WebSocket features.
 
-**Backend URL**: `https://your-backend-domain.com` (will be provided)
+**Backend URL**: `https://zerobs-back-final.onrender.com` 
 **API Version**: `v1`
 **All endpoints are prefixed with**: `/api`
 
