@@ -4,7 +4,7 @@ Contains request/response models for all endpoints.
 """
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field
 from enum import Enum
@@ -65,6 +65,12 @@ class MessageResponse(BaseModel):
     """Standard message response"""
     message: str
 
+class ApiResponse(BaseModel):
+    """Generic API response with optional data"""
+    success: bool
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
 class SuccessResponse(BaseModel):
     """Standard success response"""
     success: bool = True
@@ -75,6 +81,110 @@ class ErrorResponse(BaseModel):
     success: bool = False
     error: str
     detail: Optional[str] = None
+
+# ==========================================
+# PROJECT DATA MODELS (NUEVOS)
+# ==========================================
+
+class ProjectMetrics(BaseModel):
+    """Project metrics model"""
+    arr: Optional[str] = None
+    mrr: Optional[str] = None
+    users: Optional[str] = None
+    revenue: Optional[str] = None
+    growth_rate: Optional[str] = None
+
+class TeamInfo(BaseModel):
+    """Team information model"""
+    size: Optional[int] = None
+    roles: Optional[List[str]] = None
+    experience: Optional[str] = None
+    previous_companies: Optional[List[str]] = None
+
+class ProjectData(BaseModel):
+    """Complete project data model"""
+    categories: Optional[List[str]] = None
+    stage: Optional[str] = None
+    metrics: Optional[ProjectMetrics] = None
+    team_info: Optional[TeamInfo] = None
+    problem_solved: Optional[str] = None
+    product_status: Optional[str] = None
+    previous_funding: Optional[str] = None
+    additional_fields: Optional[Dict[str, Any]] = None
+
+# ==========================================
+# JUDGE SYSTEM MODELS (NUEVOS)
+# ==========================================
+
+class JudgeProbabilities(BaseModel):
+    """Judge decision probabilities"""
+    search_investors: float
+    search_companies: float
+    mentoring: float
+    ask_questions: float
+    anti_spam: float
+
+class ExtractedData(BaseModel):
+    """Data extracted by the judge"""
+    categories: Optional[List[str]] = None
+    stage: Optional[str] = None
+    metrics: Optional[Dict[str, str]] = None
+    team_info: Optional[Dict[str, Any]] = None
+    problem_solved: Optional[str] = None
+    product_status: Optional[str] = None
+    additional_data: Optional[Dict[str, Any]] = None
+
+class JudgeDecision(BaseModel):
+    """Judge decision model"""
+    probabilities: JudgeProbabilities
+    decision: str
+    reasoning: str
+    confidence_score: float
+    required_questions: Optional[List[str]] = None
+    extracted_data: Optional[ExtractedData] = None
+    completeness_score: float
+    should_ask_questions: bool
+    anti_spam_triggered: bool
+
+# ==========================================
+# SEARCH MODELS (ACTUALIZADOS)
+# ==========================================
+
+class InvestorResult(BaseModel):
+    """Investor search result"""
+    id: UUID
+    full_name: str
+    headline: Optional[str] = None
+    email: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    company_name: Optional[str] = None
+    fund_name: Optional[str] = None
+    relevance_score: float
+    categories_match: Optional[List[str]] = None
+    stage_match: Optional[bool] = None
+
+class CompanyResult(BaseModel):
+    """Company search result"""
+    nombre: str
+    descripcion_corta: Optional[str] = None
+    web_empresa: Optional[str] = None
+    sector_categorias: Optional[str] = None
+    service_category: Optional[str] = None
+    startup_relevance_score: Optional[float] = None
+
+class SearchResults(BaseModel):
+    """Search results container"""
+    investors: Optional[List[InvestorResult]] = None
+    companies: Optional[List[CompanyResult]] = None
+    total_found: int
+    search_criteria: Dict[str, Any]
+
+class SearchProgress(BaseModel):
+    """Search progress model"""
+    status: str
+    message: str
+    progress_percentage: int
+    current_step: Optional[str] = None
 
 # ==========================================
 # USER MODELS
@@ -121,11 +231,11 @@ class ProjectBase(BaseModel):
     """Base project model"""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    stage: ProjectStage = ProjectStage.IDEA
-    category: ProjectCategory = ProjectCategory.OTHER
 
 class ProjectCreate(ProjectBase):
     """Project creation model"""
+    stage: Optional[str] = None
+    category: Optional[str] = None
     business_model: Optional[str] = None
     revenue_model: Optional[str] = None
     target_market: Optional[str] = None
@@ -137,141 +247,125 @@ class ProjectCreate(ProjectBase):
     achievements: Optional[str] = None
     problem_solving: Optional[str] = None
 
-class ProjectUpdate(BaseModel):
-    """Project update model"""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    stage: Optional[ProjectStage] = None
-    category: Optional[ProjectCategory] = None
-    business_model: Optional[str] = None
-    revenue_model: Optional[str] = None
-    target_market: Optional[str] = None
-    funding_amount: Optional[str] = None
-    current_revenue: Optional[str] = None
-    projected_revenue: Optional[str] = None
-    team_size: Optional[int] = None
-    key_metrics: Optional[Dict[str, Any]] = None
-    achievements: Optional[str] = None
-    problem_solving: Optional[str] = None
-
-class ProjectResponse(ProjectBase):
-    """Project response model"""
+class Project(BaseModel):
+    """Complete project model"""
     id: UUID
     user_id: UUID
-    business_model: Optional[str] = None
-    revenue_model: Optional[str] = None
-    target_market: Optional[str] = None
-    funding_amount: Optional[str] = None
-    current_revenue: Optional[str] = None
-    projected_revenue: Optional[str] = None
-    team_size: Optional[int] = None
-    key_metrics: Optional[Dict[str, Any]] = None
-    achievements: Optional[str] = None
-    problem_solving: Optional[str] = None
-    completeness_score: Optional[float] = None
+    name: str
+    description: Optional[str] = None
+    categories: Optional[List[str]] = None
+    stage: Optional[str] = None
+    project_data: ProjectData
+    context_summary: Optional[str] = None
+    last_context_update: Optional[datetime] = None
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime
 
 # ==========================================
 # CONVERSATION & MESSAGE MODELS
 # ==========================================
 
-class ConversationCreate(BaseModel):
-    """Conversation creation model"""
-    title: Optional[str] = None
-    project_id: Optional[UUID] = None
+class ChatMessage(BaseModel):
+    """Chat message model"""
+    message: str
+    conversation_id: Optional[str] = None
+    project_id: Optional[str] = None
 
-class ConversationResponse(BaseModel):
-    """Conversation response model"""
+class ChatResponse(BaseModel):
+    """Chat response model"""
     id: UUID
-    user_id: UUID
-    project_id: Optional[UUID] = None
-    title: Optional[str] = None
-    message_count: int = 0
-    last_message_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-class MessageCreate(BaseModel):
-    """Message creation model"""
-    content: str = Field(..., min_length=1, max_length=10000)
-    conversation_id: UUID
-
-class MessageResponse(BaseModel):
-    """Message response model"""
-    id: UUID
-    conversation_id: UUID
-    role: MessageRole
+    project_id: UUID
+    role: str
     content: str
     ai_extractions: Optional[Dict[str, Any]] = None
     gemini_prompt_used: Optional[str] = None
-    credits_used: int = 0
+    gemini_response_raw: Optional[str] = None
     created_at: datetime
 
+class ChatConversation(BaseModel):
+    """Chat conversation model"""
+    id: UUID
+    project_id: UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+
 # ==========================================
-# SEARCH MODELS
+# COMPLETENESS MODELS (NUEVOS)
 # ==========================================
 
-class InvestorSearchRequest(BaseModel):
-    """Investor search request model"""
+class CompletenessResponse(BaseModel):
+    """Project completeness response"""
+    score: float
+    missing_fields: List[str]
+    required_fields: List[str]
+    suggestions: List[str]
+    breakdown: Dict[str, float]
+
+# ==========================================
+# WELCOME SYSTEM MODELS (NUEVOS)
+# ==========================================
+
+class WelcomeMessage(BaseModel):
+    """Welcome message model"""
+    type: str
+    stage: str
+    message: str
+    next_actions: Optional[List[Dict[str, Any]]] = None
+    progress: Optional[Dict[str, Any]] = None
+
+# ==========================================
+# LIBRARIAN MODELS (NUEVOS)
+# ==========================================
+
+class LibrarianUpdate(BaseModel):
+    """Librarian update model"""
+    project_id: UUID
+    conversation_id: UUID
+    updates_made: Dict[str, Any]
+    confidence_score: float
+    reasoning: str
+
+# ==========================================
+# OUTREACH MODELS
+# ==========================================
+
+class OutreachCampaign(BaseModel):
+    """Outreach campaign model"""
+    id: UUID
+    user_id: UUID
     project_id: Optional[UUID] = None
-    categories: Optional[List[str]] = None
-    stage: Optional[str] = None
-    location: Optional[str] = None
-    check_size_min: Optional[int] = None
-    check_size_max: Optional[int] = None
-    limit: int = Field(default=15, le=50)
-
-class CompanySearchRequest(BaseModel):
-    """Company search request model"""
-    industry: Optional[str] = None
-    size_range: Optional[str] = None
-    location: Optional[str] = None
-    technologies: Optional[List[str]] = None
-    limit: int = Field(default=10, le=50)
-
-class InvestorResponse(BaseModel):
-    """Investor response model"""
-    id: UUID
     name: str
-    linkedin_url: Optional[str] = None
-    email: Optional[str] = None
-    company: Optional[str] = None
-    title: Optional[str] = None
-    bio: Optional[str] = None
-    location: Optional[str] = None
-    investment_focus: Optional[str] = None
-    stage_preference: Optional[str] = None
-    check_size_min: Optional[int] = None
-    check_size_max: Optional[int] = None
-    portfolio_companies: Optional[List[str]] = None
-    categories: Optional[List[str]] = None
-    relevance_score: Optional[float] = None
+    status: str
+    total_targets: int
+    sent_count: int
+    reply_count: int
+    created_at: datetime
 
-class CompanyResponse(BaseModel):
-    """Company response model"""
+class OutreachTarget(BaseModel):
+    """Outreach target model"""
     id: UUID
-    name: str
-    website: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    description: Optional[str] = None
-    industry: Optional[str] = None
-    size_range: Optional[str] = None
-    location: Optional[str] = None
-    founded_year: Optional[int] = None
-    revenue_range: Optional[str] = None
-    technologies: Optional[List[str]] = None
-    contact_email: Optional[str] = None
-    phone: Optional[str] = None
-    relevance_score: Optional[float] = None
+    campaign_id: UUID
+    investor_id: UUID
+    status: str
+    personalized_message: str
+    created_at: datetime
 
-class SearchResultsResponse(BaseModel):
-    """Search results response model"""
-    results: List[InvestorResponse | CompanyResponse]
-    total_found: int
-    average_relevance: float
-    credits_used: int
-    query_params: Dict[str, Any]
+class LinkedInAccount(BaseModel):
+    """LinkedIn account model"""
+    id: UUID
+    user_id: UUID
+    unipile_account_id: str
+    status: str
+    created_at: datetime
+
+class LinkedInResponse(BaseModel):
+    """LinkedIn response model"""
+    id: UUID
+    target_id: UUID
+    response_text: str
+    received_at: datetime
 
 # ==========================================
 # PAYMENT MODELS
@@ -310,111 +404,6 @@ class CreditPurchaseResponse(BaseModel):
     created_at: datetime
 
 # ==========================================
-# LINKEDIN AUTOMATION MODELS
-# ==========================================
-
-class LinkedInAccountConnect(BaseModel):
-    """LinkedIn account connection model"""
-    email: str
-    password: str
-
-class LinkedInAccountResponse(BaseModel):
-    """LinkedIn account response model"""
-    id: UUID
-    user_id: UUID
-    unipile_account_id: str
-    email: str
-    status: str
-    last_sync: Optional[datetime] = None
-    created_at: datetime
-
-class CampaignCreate(BaseModel):
-    """Campaign creation model"""
-    name: str = Field(..., min_length=1, max_length=255)
-    project_id: Optional[UUID] = None
-    linkedin_account_id: UUID
-    sequence_type: str = "standard"
-    target_investors: List[UUID]
-
-class CampaignResponse(BaseModel):
-    """Campaign response model"""
-    id: UUID
-    user_id: UUID
-    project_id: Optional[UUID] = None
-    linkedin_account_id: UUID
-    name: str
-    status: CampaignStatus
-    sequence_type: str
-    target_count: int
-    sent_count: int
-    response_count: int
-    connection_count: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-class MessageGenerationRequest(BaseModel):
-    """Message generation request model"""
-    investor_id: UUID
-    message_type: str
-    project_context: Optional[str] = None
-    personalization_notes: Optional[str] = None
-
-class GeneratedMessageResponse(BaseModel):
-    """Generated message response model"""
-    id: UUID
-    investor_id: str
-    message_type: str
-    message_content: str
-    personalization_score: float
-    generated_at: datetime
-
-# ==========================================
-# ANALYTICS MODELS
-# ==========================================
-
-class UserAnalyticsResponse(BaseModel):
-    """User analytics response model"""
-    total_credits_used: int
-    total_searches: int
-    total_messages_generated: int
-    total_campaigns: int
-    average_response_rate: float
-    most_active_day: Optional[str] = None
-    last_30_days_activity: Dict[str, int]
-
-class PlatformAnalyticsResponse(BaseModel):
-    """Platform analytics response model"""
-    total_users: int
-    active_users_30d: int
-    total_projects: int
-    total_searches: int
-    total_credits_used: int
-    revenue_30d: float
-    conversion_rate: float
-    most_popular_categories: List[Dict[str, Any]]
-
-# ==========================================
-# ONBOARDING MODELS
-# ==========================================
-
-class OnboardingStageUpdate(BaseModel):
-    """Onboarding stage update model"""
-    stage: str
-    completed: bool = True
-
-class OnboardingResponse(BaseModel):
-    """Onboarding response model"""
-    id: UUID
-    user_id: UUID
-    current_stage: str
-    completed_stages: List[str]
-    completed: bool
-    progress_percentage: float
-    next_recommended_action: Optional[str] = None
-    started_at: datetime
-    updated_at: Optional[datetime] = None
-
-# ==========================================
 # WEBSOCKET MODELS
 # ==========================================
 
@@ -423,21 +412,6 @@ class WebSocketMessage(BaseModel):
     type: str
     data: Dict[str, Any]
     timestamp: datetime = Field(default_factory=datetime.now)
-
-class ChatMessage(BaseModel):
-    """Chat message for WebSocket"""
-    conversation_id: UUID
-    message: str
-    project_id: Optional[UUID] = None
-
-class ChatResponse(BaseModel):
-    """Chat response for WebSocket"""
-    conversation_id: UUID
-    message_id: UUID
-    content: str
-    role: MessageRole
-    ai_extractions: Optional[Dict[str, Any]] = None
-    credits_used: int = 0
 
 # ==========================================
 # UTILITY MODELS
@@ -466,21 +440,6 @@ class PaginatedResponse(BaseModel):
     pages: int
     has_next: bool
     has_prev: bool
-
-# ==========================================
-# ALIASES FOR BACKWARD COMPATIBILITY
-# ==========================================
-
-# Aliases for database imports compatibility
-Project = ProjectResponse
-ProjectData = ProjectResponse
-InvestorResult = InvestorResponse
-CompanyResult = CompanyResponse
-ChatConversation = ConversationResponse
-OutreachCampaign = CampaignResponse
-OutreachTarget = CampaignResponse  # This might need specific model later
-LinkedInAccount = LinkedInAccountResponse
-LinkedInResponse = LinkedInAccountResponse
 
 # ==========================================
 # CONFIGURATION
