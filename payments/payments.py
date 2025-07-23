@@ -57,11 +57,11 @@ CREDIT_PACKAGES = {
 # ==========================================
 
 class CreateSubscriptionRequest(BaseModel):
-    plan: str = Field(..., regex="^(pro|outreach)$")
+    plan: str = Field(..., pattern="^(pro|outreach)$")
     payment_method_id: str
 
 class BuyCreditsRequest(BaseModel):
-    package: str = Field(..., regex="^(small|medium|large)$")
+    package: str = Field(..., pattern="^(small|medium|large)$")
     payment_method_id: str
 
 class SubscriptionResponse(BaseModel):
