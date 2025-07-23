@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize router and security
-router = APIRouter()
+auth_router = APIRouter()
 security = HTTPBearer()
 
 # Password hashing
@@ -172,7 +172,7 @@ def _calculate_daily_credits_remaining(user_data: dict) -> int:
 # AUTHENTICATION ENDPOINTS
 # ==========================================
 
-@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+@auth_router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(user_data: UserRegister):
     """Register new user with custom JWT auth"""
     try:
@@ -252,7 +252,7 @@ async def register_user(user_data: UserRegister):
             detail="Internal server error"
         )
 
-@router.post("/login", response_model=AuthResponse)
+@auth_router.post("/login", response_model=AuthResponse)
 async def login_user(login_data: UserLogin):
     """Login user with email/password"""
     try:
@@ -312,7 +312,7 @@ async def login_user(login_data: UserLogin):
             detail="Internal server error"
         )
 
-@router.post("/refresh", response_model=TokenResponse)
+@auth_router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(token_data: TokenRefresh):
     """Refresh access token using refresh token"""
     try:
@@ -359,7 +359,7 @@ async def refresh_token(token_data: TokenRefresh):
             detail="Internal server error"
         )
 
-@router.post("/logout")
+@auth_router.post("/logout")
 async def logout_user(
     token_data: TokenRefresh,
     current_user: UUID = Depends(get_current_user)
@@ -383,7 +383,7 @@ async def logout_user(
 # USER INFO ENDPOINTS
 # ==========================================
 
-@router.get("/me", response_model=UserResponse)
+@auth_router.get("/me", response_model=UserResponse)
 async def get_current_user_info(current_user: UUID = Depends(get_current_user)):
     """Get current user information"""
     try:
@@ -418,7 +418,7 @@ async def get_current_user_info(current_user: UUID = Depends(get_current_user)):
 # PASSWORD MANAGEMENT ENDPOINTS
 # ==========================================
 
-@router.post("/request-password-reset")
+@auth_router.post("/request-password-reset")
 async def request_password_reset(reset_data: PasswordResetRequest):
     """Request password reset using Supabase Auth"""
     try:
@@ -442,7 +442,7 @@ async def request_password_reset(reset_data: PasswordResetRequest):
             message="If the email exists, a reset link has been sent to your email"
         )
 
-@router.post("/reset-password")
+@auth_router.post("/reset-password")
 async def reset_password(reset_data: PasswordResetConfirm):
     """Reset password with token from email"""
     try:
@@ -469,7 +469,7 @@ async def reset_password(reset_data: PasswordResetConfirm):
             detail="Invalid or expired reset token"
         )
 
-@router.post("/change-password")
+@auth_router.post("/change-password")
 async def change_password(
     password_data: ChangePasswordRequest,
     current_user: UUID = Depends(get_current_user)
