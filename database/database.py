@@ -633,6 +633,242 @@ class Database:
         stages_strong = investor.get("stages_strong", []) or []
         
         return stage in stages_general or stage in stages_strong
+# ==========================================
+    # AUTHENTICATION METHODS (NUEVOS)
+    # ==========================================
+    
+    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Obtener usuario por email"""
+        try:
+            result = self.supabase.table("users").select("*").eq("email", email).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting user by email: {e}")
+            return None
 
+    async def get_user_by_id(self, user_id: UUID) -> Optional[Dict[str, Any]]:
+        """Obtener usuario por ID"""
+        try:
+            result = self.supabase.table("users").select("*").eq("id", str(user_id)).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting user by ID: {e}")
+            return None
+
+    async def update_user_last_login(self, user_id: UUID) -> bool:
+        """Actualizar última fecha de login"""
+        try:
+            result = self.supabase.table("users").update({
+                "last_login": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", str(user_id)).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating last login: {e}")
+            return False
+
+    async def store_refresh_token(self, user_id: UUID, refresh_token: str) -> bool:
+        """Almacenar refresh token"""
+        try:
+            # Primero invalidar tokens anteriores
+            self.supabase.table("refresh_tokens")\
+                .update({"is_valid": False})\
+                .eq("user_id", str(user_id))\
+                .execute()
+            
+            # Crear nuevo token
+            token_data = {
+                "id": str(uuid4()),
+                "user_id": str(user_id),
+                "token": refresh_token,
+                "is_valid": True,
+                "created_at": datetime.now().isoformat(),
+                "expires_at": (datetime.now() + timedelta(days=30)).isoformat()
+            }
+            
+            result = self.supabase.table("refresh_tokens").insert(token_data).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error storing refresh token: {e}")
+            return False
+
+    async def is_refresh_token_valid(self, user_id: UUID, refresh_token: str) -> bool:
+        """Verificar si refresh token es válido"""
+        try:
+            result = self.supabase.table("refresh_tokens")\
+                .select("*")\
+                .eq("user_id", str(user_id))\
+                .eq("token", refresh_token)\
+                .eq("is_valid", True)\
+                .gt("expires_at", datetime.now().isoformat())\
+                .execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error validating refresh token: {e}")
+            return False
+
+    async def invalidate_refresh_token(self, user_id: UUID, refresh_token: str) -> bool:
+        """Invalidar refresh token específico"""
+        try:
+            result = self.supabase.table("refresh_tokens")\
+                .update({"is_valid": False})\
+                .eq("user_id", str(user_id))\
+                .eq("token", refresh_token)\
+                .execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error invalidating refresh token: {e}")
+            return False
+
+    async def invalidate_all_refresh_tokens(self, user_id: UUID) -> bool:
+        """Invalidar todos los refresh tokens del usuario"""
+        try:
+            result = self.supabase.table("refresh_tokens")\
+                .update({"is_valid": False})\
+                .eq("user_id", str(user_id))\
+                .execute()
+            return True  # Siempre retorna True aunque no haya tokens
+        except Exception as e:
+            logger.error(f"Error invalidating all refresh tokens: {e}")
+            return False
+
+    async def deduct_user_credits(self, user_id: UUID, credits: int) -> bool:
+        """Deducir créditos del usuario"""
+        try:
+            # Obtener créditos actuales
+            user = await self.get_user_by_id(user_id)
+            if not user:
+                return False
+            
+            current_credits = user.get("credits", 0)
+            if current_credits < credits:
+                return False  # No tiene suficientes créditos
+            
+            new_credits = current_credits - credits
+            
+            result = self.supabase.table("users")\
+                .update({
+                    "credits": new_credits,
+                    "updated_at": datetime.now().isoformat()
+                })\
+                .eq("id", str(user_id))\
+                .execute()
+            
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error deducting user credits: {e}")
+            return False
+
+    async def update_user_credits(self, user_id: UUID, new_credits: int) -> bool:
+        """Actualizar créditos del usuario"""
+        try:
+            result = self.supabase.table("users")\
+                .update({
+                    "credits": new_credits,
+                    "updated_at": datetime.now().isoformat()
+                })\
+                .eq("id", str(user_id))\
+                .execute()
+            
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating user credits: {e}")
+            return False
+
+    async def update_user_plan(self, user_id: UUID, plan: str, credits: int, daily_credits: int) -> bool:
+        """Actualizar plan del usuario"""
+        try:
+            result = self.supabase.table("users")\
+                .update({
+                    "plan": plan,
+                    "credits": credits,
+                    "daily_credits_limit": daily_credits,
+                    "updated_at": datetime.now().isoformat()
+                })\
+                .eq("id", str(user_id))\
+                .execute()
+            
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating user plan: {e}")
+            return False
+
+    # ==========================================
+    # SUBSCRIPTION METHODS (NUEVOS)
+    # ==========================================
+    
+    async def get_user_subscription(self, user_id: UUID) -> Optional[Dict[str, Any]]:
+        """Obtener suscripción del usuario"""
+        try:
+            result = self.supabase.table("subscriptions")\
+                .select("*")\
+                .eq("user_id", str(user_id))\
+                .eq("status", "active")\
+                .execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Error getting user subscription: {e}")
+            return None
+
+    async def update_subscription_status(self, user_id: UUID, status: str) -> bool:
+        """Actualizar estado de suscripción"""
+        try:
+            result = self.supabase.table("subscriptions")\
+                .update({
+                    "status": status,
+                    "updated_at": datetime.now().isoformat()
+                })\
+                .eq("user_id", str(user_id))\
+                .execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating subscription status: {e}")
+            return False
+
+    async def store_subscription(self, subscription_data: Dict[str, Any]) -> bool:
+        """Almacenar datos de suscripción"""
+        try:
+            result = self.supabase.table("subscriptions").insert(subscription_data).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error storing subscription: {e}")
+            return False
+
+    async def store_credit_purchase(self, purchase_data: Dict[str, Any]) -> bool:
+        """Almacenar compra de créditos"""
+        try:
+            result = self.supabase.table("credit_purchases").insert(purchase_data).execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error storing credit purchase: {e}")
+            return False
+
+    async def update_subscription_by_stripe_id(self, stripe_subscription_id: str, updates: Dict[str, Any]) -> bool:
+        """Actualizar suscripción por ID de Stripe"""
+        try:
+            result = self.supabase.table("subscriptions")\
+                .update(updates)\
+                .eq("stripe_subscription_id", stripe_subscription_id)\
+                .execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating subscription by Stripe ID: {e}")
+            return False
+
+    async def update_user_stripe_customer(self, user_id: UUID, stripe_customer_id: str) -> bool:
+        """Actualizar ID de cliente de Stripe"""
+        try:
+            result = self.supabase.table("users")\
+                .update({
+                    "stripe_customer_id": stripe_customer_id,
+                    "updated_at": datetime.now().isoformat()
+                })\
+                .eq("id", str(user_id))\
+                .execute()
+            return len(result.data) > 0
+        except Exception as e:
+            logger.error(f"Error updating Stripe customer ID: {e}")
+            return False
+            
 # Instancia global
 db = Database()
