@@ -468,6 +468,21 @@ class PaginatedResponse(BaseModel):
     has_prev: bool
 
 # ==========================================
+# ALIASES FOR BACKWARD COMPATIBILITY
+# ==========================================
+
+# Aliases for database imports compatibility
+Project = ProjectResponse
+ProjectData = ProjectResponse
+InvestorResult = InvestorResponse
+CompanyResult = CompanyResponse
+ChatConversation = ConversationResponse
+OutreachCampaign = CampaignResponse
+OutreachTarget = CampaignResponse  # This might need specific model later
+LinkedInAccount = LinkedInAccountResponse
+LinkedInResponse = LinkedInAccountResponse
+
+# ==========================================
 # CONFIGURATION
 # ==========================================
 
