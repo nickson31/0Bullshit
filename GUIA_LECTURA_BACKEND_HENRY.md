@@ -192,6 +192,23 @@ La base de datos usa **17 tablas principales** con relaciones apropiadas y Row L
 - **Relevancia geográfica**: Scoring basado en ubicación
 - **Análisis de portfolio**: Track record e inversiones previas
 
+### **4.1. Búsqueda de Companies (Implementada en `database/database.py`)**
+- **Funcionalidad**: `search_companies()` - Búsqueda de empresas B2B para servicios
+- **Tabla origen**: `companies` (con data de CrunchBase + Apify)
+- **Algoritmo de matching**: Keywords generales + específicas
+- **Campos de búsqueda**:
+  - `keywords_generales`: Keywords amplias del sector
+  - `keywords_especificas`: Keywords técnicas específicas  
+  - `sector_categorias`: Categorías principales de CrunchBase
+- **Filtros aplicados**:
+  - Matching por `problem_context` del usuario
+  - Filtro por `categories` de interés
+  - Límite configurable de resultados
+- **Output**: `CompanyResult` con nombre, descripción, web, categorías
+- **Integración chat**: Judge decide cuándo ejecutar `search_companies`
+- **Handler**: `_handle_search_companies()` en `chat/chat.py`
+- **Estado**: ✅ **COMPLETAMENTE IMPLEMENTADO Y FUNCIONAL**
+
 ### **5. Sistema de Pagos (`payments/payments.py`)**
 - **Integración Stripe**: Manejo completo de suscripciones y pagos de una vez
 - **Procesamiento de webhooks**: Actualizaciones automáticas de estado de suscripción
