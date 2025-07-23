@@ -13,12 +13,9 @@ bcrypt==4.1.2
 aiofiles==23.2.1
 email-validator==2.1.0
 websockets==12.0
-httpx==0.25.2
-asyncio==3.4.3
+httpx==0.24.1
 pandas==2.1.4
 numpy==1.25.2
-datetime==5.2
-uuid==1.30
 typing-extensions==4.8.0
 jinja2==3.1.2
 markupsafe==2.1.3

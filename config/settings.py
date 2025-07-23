@@ -1,322 +1,295 @@
+"""
+Configuration settings for 0Bullshit backend application.
+Loads environment variables and provides default values.
+"""
+
 import os
-from typing import List, Optional
-from pydantic import BaseSettings, validator
-from functools import lru_cache
-
-class Settings(BaseSettings):
-    """Configuración de la aplicación"""
-    
-    # ==========================================
-    # CONFIGURACIÓN BÁSICA
-    # ==========================================
-    PROJECT_NAME: str = "0Bullshit Backend"
-    API_V1_STR: str = "/api/v1"
-    DEBUG: bool = False
-    ENVIRONMENT: str = "development"  # development, staging, production
-    HOST: str = "0.0.0.0"
-    PORT: int = 8000
-    
-    # ==========================================
-    # BASE DE DATOS
-    # ==========================================
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
-    
-    @validator("SUPABASE_URL")
-    def validate_supabase_url(cls, v):
-        if not v or not v.startswith("https://"):
-            raise ValueError("SUPABASE_URL must be a valid HTTPS URL")
-        return v
-    
-    # ==========================================
-    # APIS EXTERNAS
-    # ==========================================
-    GEMINI_API_KEY: str
-    UNIPILE_API_KEY: Optional[str] = None
-    UNIPILE_DSN: Optional[str] = None
-    STRIPE_API_KEY: Optional[str] = None
-    STRIPE_WEBHOOK_SECRET: Optional[str] = None
-    
-    @validator("GEMINI_API_KEY")
-    def validate_gemini_key(cls, v):
-        if not v or len(v) < 20:
-            raise ValueError("GEMINI_API_KEY must be provided and valid")
-        return v
-    
-    # ==========================================
-    # SEGURIDAD
-    # ==========================================
-    JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRATION_HOURS: int = 24
-    
-    @validator("JWT_SECRET_KEY")
-    def validate_jwt_secret(cls, v):
-        if not v or len(v) < 32:
-            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
-        return v
-    
-    # ==========================================
-    # CORS
-    # ==========================================
-    CORS_ORIGINS: List[str] = ["*"]  # En producción, especificar dominios
-    CORS_ALLOW_CREDENTIALS: bool = True
-    CORS_ALLOW_METHODS: List[str] = ["*"]
-    CORS_ALLOW_HEADERS: List[str] = ["*"]
-    
-    # ==========================================
-    # CHAT CONFIGURATION
-    # ==========================================
-    
-    # Gemini settings
-    GEMINI_TEMPERATURE: float = 0.7
-    GEMINI_TOP_P: float = 0.9
-    GEMINI_TOP_K: int = 40
-    GEMINI_MAX_OUTPUT_TOKENS: int = 3000
-    
-    # Chat limits
-    MAX_MESSAGE_LENGTH: int = 10000
-    MAX_CONVERSATION_HISTORY: int = 50
-    MAX_PROJECTS_PER_USER: int = 50
-    
-    # Search settings
-    MAX_INVESTOR_RESULTS: int = 15
-    MAX_COMPANY_RESULTS: int = 10
-    SEARCH_CACHE_TTL_MINUTES: int = 30
-    
-    # Completeness scoring
-    CATEGORIES_WEIGHT: float = 0.25
-    STAGE_WEIGHT: float = 0.25
-    METRICS_WEIGHT: float = 0.15
-    TEAM_WEIGHT: float = 0.10
-    PROBLEM_WEIGHT: float = 0.10
-    PRODUCT_WEIGHT: float = 0.10
-    FUNDING_WEIGHT: float = 0.05
-    
-    # Rate limiting
-    RATE_LIMIT_REQUESTS: int = 30
-    RATE_LIMIT_WINDOW_MINUTES: int = 1
-    
-    # WebSocket settings
-    WS_HEARTBEAT_INTERVAL: int = 30
-    WS_MAX_CONNECTIONS: int = 1000
-    
-    # ==========================================
-    # FEATURES FLAGS
-    # ==========================================
-    ENABLE_LIBRARIAN_BOT: bool = True
-    ENABLE_WELCOME_MESSAGES: bool = True
-    ENABLE_ANTI_SPAM: bool = True
-    ENABLE_SEARCH_CACHING: bool = True
-    ENABLE_WEBSOCKETS: bool = True
-    ENABLE_RATE_LIMITING: bool = True
-    
-    # ==========================================
-    # LOGGING
-    # ==========================================
-    LOG_LEVEL: str = "INFO"
-    LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    LOG_FILE: Optional[str] = None
-    
-    # ==========================================
-    # EXTERNAL SERVICES
-    # ==========================================
-    
-    # Email settings (para futuro)
-    SENDGRID_API_KEY: Optional[str] = None
-    FROM_EMAIL: str = "noreply@0bullshit.com"
-    
-    # Redis (para futuro)
-    REDIS_URL: Optional[str] = None
-    
-    # Monitoring (para futuro)
-    SENTRY_DSN: Optional[str] = None
-    
-    # ==========================================
-    # BUSINESS LOGIC SETTINGS
-    # ==========================================
-    
-    # Y-Combinator principles toggle
-    ENABLE_YC_PRINCIPLES: bool = True
-    
-    # Anti-spam configuration
-    SPAM_DETECTION_THRESHOLD: float = 0.8
-    MIN_MESSAGE_LENGTH: int = 3
-    MAX_REPEATED_CHARS: int = 5
-    
-    # Judge system thresholds
-    SEARCH_INVESTORS_THRESHOLD: float = 70.0
-    SEARCH_COMPANIES_THRESHOLD: float = 70.0
-    ASK_QUESTIONS_THRESHOLD: float = 50.0
-    ANTI_SPAM_THRESHOLD: float = 80.0
-    
-    # Completeness thresholds
-    MIN_COMPLETENESS_FOR_SEARCH: float = 0.5
-    RECOMMEND_QUESTIONS_THRESHOLD: float = 0.7
-    
-    # Search relevance
-    MIN_INVESTOR_RELEVANCE: float = 0.3
-    MIN_COMPANY_RELEVANCE: float = 0.2
-    
-    # ==========================================
-    # VALIDATION
-    # ==========================================
-    
-    @validator("ENVIRONMENT")
-    def validate_environment(cls, v):
-        allowed = ["development", "staging", "production"]
-        if v not in allowed:
-            raise ValueError(f"ENVIRONMENT must be one of {allowed}")
-        return v
-    
-    @validator("LOG_LEVEL")
-    def validate_log_level(cls, v):
-        allowed = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        if v.upper() not in allowed:
-            raise ValueError(f"LOG_LEVEL must be one of {allowed}")
-        return v.upper()
-    
-    @validator("CORS_ORIGINS")
-    def validate_cors_origins(cls, v):
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
-    
-    # ==========================================
-    # COMPUTED PROPERTIES
-    # ==========================================
-    
-    @property
-    def is_development(self) -> bool:
-        return self.ENVIRONMENT == "development"
-    
-    @property
-    def is_production(self) -> bool:
-        return self.ENVIRONMENT == "production"
-    
-    @property
-    def database_url(self) -> str:
-        return self.SUPABASE_URL
-    
-    @property
-    def gemini_config(self) -> dict:
-        return {
-            "temperature": self.GEMINI_TEMPERATURE,
-            "top_p": self.GEMINI_TOP_P,
-            "top_k": self.GEMINI_TOP_K,
-            "max_output_tokens": self.GEMINI_MAX_OUTPUT_TOKENS,
-        }
-    
-    @property
-    def completeness_weights(self) -> dict:
-        return {
-            "categories": self.CATEGORIES_WEIGHT,
-            "stage": self.STAGE_WEIGHT,
-            "metrics": self.METRICS_WEIGHT,
-            "team_info": self.TEAM_WEIGHT,
-            "problem_solved": self.PROBLEM_WEIGHT,
-            "product_status": self.PRODUCT_WEIGHT,
-            "previous_funding": self.FUNDING_WEIGHT,
-        }
-    
-    @property
-    def judge_thresholds(self) -> dict:
-        return {
-            "search_investors": self.SEARCH_INVESTORS_THRESHOLD,
-            "search_companies": self.SEARCH_COMPANIES_THRESHOLD,
-            "ask_questions": self.ASK_QUESTIONS_THRESHOLD,
-            "anti_spam": self.ANTI_SPAM_THRESHOLD,
-        }
-    
-    # ==========================================
-    # CONFIGURACIÓN DE CLASE
-    # ==========================================
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+from typing import Optional
 
 # ==========================================
-# CONFIGURACIONES POR AMBIENTE
+# ENVIRONMENT DETECTION
 # ==========================================
 
-class DevelopmentSettings(Settings):
-    """Configuración para desarrollo"""
-    DEBUG: bool = True
-    LOG_LEVEL: str = "DEBUG"
-    ENABLE_RATE_LIMITING: bool = False
-
-class ProductionSettings(Settings):
-    """Configuración para producción"""
-    DEBUG: bool = False
-    LOG_LEVEL: str = "WARNING"
-    CORS_ORIGINS: List[str] = [
-        "https://app.0bullshit.com",
-        "https://0bullshit.com"
-    ]
-
-class TestingSettings(Settings):
-    """Configuración para testing"""
-    DEBUG: bool = True
-    LOG_LEVEL: str = "DEBUG"
-    ENABLE_RATE_LIMITING: bool = False
-    ENABLE_WEBSOCKETS: bool = False
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+DEBUG = ENVIRONMENT == "development"
 
 # ==========================================
-# FACTORY FUNCTION
+# DATABASE CONFIGURATION
 # ==========================================
 
-@lru_cache()
-def get_settings() -> Settings:
-    """Factory function para obtener settings basado en ENVIRONMENT"""
-    environment = os.getenv("ENVIRONMENT", "development").lower()
-    
-    if environment == "development":
-        return DevelopmentSettings()
-    elif environment == "production":
-        return ProductionSettings()
-    elif environment == "testing":
-        return TestingSettings()
+# Supabase Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # anon key
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # service_role key for admin operations
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
+
+# ==========================================
+# JWT CONFIGURATION
+# ==========================================
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not JWT_SECRET_KEY:
+    if DEBUG:
+        JWT_SECRET_KEY = "dev-secret-key-change-in-production"
     else:
-        return Settings()
+        raise ValueError("JWT_SECRET_KEY must be set in production")
 
-# Instancia global
-settings = get_settings()
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
 
 # ==========================================
-# VALIDATION HELPERS
+# AI CONFIGURATION
 # ==========================================
 
-def validate_settings() -> bool:
-    """Validar que todas las configuraciones críticas estén presentes"""
-    try:
-        settings = get_settings()
-        
-        # Verificar configuraciones críticas
-        critical_settings = [
-            settings.SUPABASE_URL,
-            settings.SUPABASE_KEY,
-            settings.GEMINI_API_KEY,
-            settings.JWT_SECRET_KEY
+# Google Gemini Configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY must be set in environment variables")
+
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+
+# ==========================================
+# PAYMENT CONFIGURATION
+# ==========================================
+
+# Stripe Configuration
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+if not STRIPE_SECRET_KEY:
+    if not DEBUG:
+        raise ValueError("STRIPE_SECRET_KEY must be set in production")
+
+# Stripe Product/Price IDs
+STRIPE_PRICE_ID_PRO = os.getenv("STRIPE_PRICE_ID_PRO")
+STRIPE_PRICE_ID_OUTREACH = os.getenv("STRIPE_PRICE_ID_OUTREACH")
+STRIPE_PRICE_ID_CREDITS_100 = os.getenv("STRIPE_PRICE_ID_CREDITS_100")
+STRIPE_PRICE_ID_CREDITS_500 = os.getenv("STRIPE_PRICE_ID_CREDITS_500")
+
+# ==========================================
+# LINKEDIN AUTOMATION CONFIGURATION
+# ==========================================
+
+# Unipile Configuration
+UNIPILE_API_KEY = os.getenv("UNIPILE_API_KEY")
+UNIPILE_BASE_URL = os.getenv("UNIPILE_BASE_URL", "https://api.unipile.com/v1")
+
+if not UNIPILE_API_KEY:
+    if not DEBUG:
+        raise ValueError("UNIPILE_API_KEY must be set in production")
+
+# ==========================================
+# APPLICATION CONFIGURATION
+# ==========================================
+
+# API Configuration
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("PORT", "8000"))  # Render uses PORT env var
+API_WORKERS = int(os.getenv("API_WORKERS", "1"))
+
+# CORS Configuration
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://your-production-domain.com"  # Update with actual production domain
+]
+
+# ==========================================
+# RATE LIMITING CONFIGURATION
+# ==========================================
+
+# Credit System Configuration
+DEFAULT_FREE_CREDITS = int(os.getenv("DEFAULT_FREE_CREDITS", "200"))
+DEFAULT_DAILY_CREDIT_LIMIT_FREE = int(os.getenv("DEFAULT_DAILY_CREDIT_LIMIT_FREE", "50"))
+DEFAULT_DAILY_CREDIT_LIMIT_PRO = int(os.getenv("DEFAULT_DAILY_CREDIT_LIMIT_PRO", "150"))
+DEFAULT_DAILY_CREDIT_LIMIT_OUTREACH = int(os.getenv("DEFAULT_DAILY_CREDIT_LIMIT_OUTREACH", "200"))
+
+# LinkedIn Rate Limits (per day)
+LINKEDIN_CONNECTION_LIMIT_PER_DAY = int(os.getenv("LINKEDIN_CONNECTION_LIMIT_PER_DAY", "100"))
+LINKEDIN_MESSAGE_LIMIT_PER_DAY = int(os.getenv("LINKEDIN_MESSAGE_LIMIT_PER_DAY", "50"))
+
+# ==========================================
+# AI AGENT CONFIGURATION
+# ==========================================
+
+# Upselling System Configuration
+UPSELL_MAX_ATTEMPTS_PER_DAY = int(os.getenv("UPSELL_MAX_ATTEMPTS_PER_DAY", "3"))
+UPSELL_COOLDOWN_HOURS = int(os.getenv("UPSELL_COOLDOWN_HOURS", "4"))
+UPSELL_MIN_CONFIDENCE = float(os.getenv("UPSELL_MIN_CONFIDENCE", "0.7"))
+
+# ==========================================
+# LOGGING CONFIGURATION
+# ==========================================
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# ==========================================
+# EMAIL CONFIGURATION (Optional)
+# ==========================================
+
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_FROM_ADDRESS = os.getenv("EMAIL_FROM_ADDRESS", "noreply@0bullshit.com")
+
+# ==========================================
+# WEBSOCKET CONFIGURATION
+# ==========================================
+
+WEBSOCKET_HEARTBEAT_INTERVAL = int(os.getenv("WEBSOCKET_HEARTBEAT_INTERVAL", "30"))
+WEBSOCKET_MAX_CONNECTIONS_PER_USER = int(os.getenv("WEBSOCKET_MAX_CONNECTIONS_PER_USER", "5"))
+
+# ==========================================
+# CACHE CONFIGURATION
+# ==========================================
+
+# Redis Configuration (optional for caching)
+REDIS_URL = os.getenv("REDIS_URL")
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "3600"))  # 1 hour
+
+# ==========================================
+# SECURITY CONFIGURATION
+# ==========================================
+
+# Password Requirements
+MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
+MAX_PASSWORD_LENGTH = int(os.getenv("MAX_PASSWORD_LENGTH", "128"))
+
+# Session Configuration
+SESSION_TIMEOUT_HOURS = int(os.getenv("SESSION_TIMEOUT_HOURS", "24"))
+REFRESH_TOKEN_LIFETIME_DAYS = int(os.getenv("REFRESH_TOKEN_LIFETIME_DAYS", "30"))
+
+# API Rate Limiting
+API_RATE_LIMIT_PER_MINUTE = int(os.getenv("API_RATE_LIMIT_PER_MINUTE", "60"))
+API_RATE_LIMIT_PER_HOUR = int(os.getenv("API_RATE_LIMIT_PER_HOUR", "1000"))
+
+# ==========================================
+# FEATURE FLAGS
+# ==========================================
+
+# Enable/Disable Features
+ENABLE_REGISTRATION = os.getenv("ENABLE_REGISTRATION", "true").lower() == "true"
+ENABLE_PASSWORD_RESET = os.getenv("ENABLE_PASSWORD_RESET", "true").lower() == "true"
+ENABLE_LINKEDIN_AUTOMATION = os.getenv("ENABLE_LINKEDIN_AUTOMATION", "true").lower() == "true"
+ENABLE_UPSELLING = os.getenv("ENABLE_UPSELLING", "true").lower() == "true"
+ENABLE_ANALYTICS = os.getenv("ENABLE_ANALYTICS", "true").lower() == "true"
+
+# ==========================================
+# PLAN CONFIGURATIONS
+# ==========================================
+
+PLAN_LIMITS = {
+    "free": {
+        "credits": DEFAULT_FREE_CREDITS,
+        "daily_credits": DEFAULT_DAILY_CREDIT_LIMIT_FREE,
+        "projects": 1,
+        "monthly_price": 0,
+        "features": [
+            "Basic AI Chat",
+            "Limited Investor Search",
+            "Basic Analytics"
         ]
-        
-        if not all(critical_settings):
-            return False
-        
-        return True
-        
-    except Exception:
-        return False
-
-def get_feature_flags() -> dict:
-    """Obtener feature flags activos"""
-    return {
-        "librarian_bot": settings.ENABLE_LIBRARIAN_BOT,
-        "welcome_messages": settings.ENABLE_WELCOME_MESSAGES,
-        "anti_spam": settings.ENABLE_ANTI_SPAM,
-        "search_caching": settings.ENABLE_SEARCH_CACHING,
-        "websockets": settings.ENABLE_WEBSOCKETS,
-        "rate_limiting": settings.ENABLE_RATE_LIMITING,
-        "yc_principles": settings.ENABLE_YC_PRINCIPLES,
+    },
+    "pro": {
+        "credits": -1,  # Unlimited
+        "daily_credits": DEFAULT_DAILY_CREDIT_LIMIT_PRO,
+        "projects": 5,
+        "monthly_price": 19,
+        "features": [
+            "Unlimited AI Chat",
+            "Advanced Investor Search",
+            "Full Analytics",
+            "Priority Support"
+        ]
+    },
+    "outreach": {
+        "credits": -1,  # Unlimited
+        "daily_credits": DEFAULT_DAILY_CREDIT_LIMIT_OUTREACH,
+        "projects": -1,  # Unlimited
+        "monthly_price": 49,
+        "features": [
+            "Everything in Pro",
+            "LinkedIn Automation",
+            "Outreach Campaigns",
+            "Custom Message Generation",
+            "Advanced Analytics"
+        ]
     }
+}
+
+# ==========================================
+# API ENDPOINTS CONFIGURATION
+# ==========================================
+
+# External API Endpoints
+UNIPILE_LINKEDIN_CONNECT_URL = f"{UNIPILE_BASE_URL}/linkedin/connect"
+UNIPILE_LINKEDIN_MESSAGE_URL = f"{UNIPILE_BASE_URL}/linkedin/message"
+UNIPILE_LINKEDIN_PROFILE_URL = f"{UNIPILE_BASE_URL}/linkedin/profile"
+
+# ==========================================
+# VALIDATION FUNCTIONS
+# ==========================================
+
+def validate_environment() -> None:
+    """Validate that all required environment variables are set"""
+    required_vars = [
+        "SUPABASE_URL",
+        "SUPABASE_KEY",
+        "GEMINI_API_KEY"
+    ]
+    
+    if not DEBUG:
+        required_vars.extend([
+            "JWT_SECRET_KEY",
+            "STRIPE_SECRET_KEY",
+            "UNIPILE_API_KEY"
+        ])
+    
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
+def get_plan_limits(plan: str) -> dict:
+    """Get limits for a specific plan"""
+    return PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+
+def is_feature_enabled(feature: str) -> bool:
+    """Check if a feature is enabled"""
+    feature_flags = {
+        "registration": ENABLE_REGISTRATION,
+        "password_reset": ENABLE_PASSWORD_RESET,
+        "linkedin_automation": ENABLE_LINKEDIN_AUTOMATION,
+        "upselling": ENABLE_UPSELLING,
+        "analytics": ENABLE_ANALYTICS
+    }
+    return feature_flags.get(feature, False)
+
+# ==========================================
+# INITIALIZE VALIDATION
+# ==========================================
+
+if __name__ == "__main__":
+    try:
+        validate_environment()
+        print("✅ All environment variables are properly configured")
+    except ValueError as e:
+        print(f"❌ Configuration error: {e}")
+        exit(1)
+else:
+    # Validate environment when module is imported
+    try:
+        validate_environment()
+    except ValueError as e:
+        if not DEBUG:
+            raise e
+        else:
+            print(f"⚠️  Development mode warning: {e}")
