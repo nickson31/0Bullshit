@@ -576,4 +576,4 @@ class MessageGenerator:
 
 
 # Instancia global
-message_generator = MessageGenerator()
+message_personalizer = MessageGenerator()

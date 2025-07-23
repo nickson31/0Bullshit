@@ -21,7 +21,7 @@ from database.database import Database
 from investors.investors import investor_search_engine
 from chat.upsell_system import upsell_system
 from chat.welcome_system import welcome_system
-from campaigns.message_generator import message_generator
+from campaigns.message_generator import message_personalizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
