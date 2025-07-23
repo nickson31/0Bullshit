@@ -381,28 +381,93 @@ async def stripe_webhook(request: Request):
 
 ## 🔗 **AUTOMATIZACIÓN LINKEDIN**
 
-### **Integración Unipile:**
+### **Integración Unipile Completa:**
 ```python
-# Ubicado en api/campaigns.py
-import httpx
-
+# Ubicado en integrations/unipile_client.py (488 líneas)
 class UnipileClient:
     def __init__(self):
         self.api_key = UNIPILE_API_KEY
-        self.base_url = "https://api.unipile.com/v1"
+        self.api_url = "https://api2.unipile.com:13044/api/v1"
+        self.dsn = UNIPILE_DSN
     
-    async def send_connection_request(self, account_id: str, target_profile: str, message: str):
-        # Enviar solicitud de conexión personalizada
-        # Manejar rate limiting
-        # Rastrear estado de entrega
+    async def send_invitation(self, account_id: str, provider_id: str, message: str):
+        # Enviar solicitud de conexión personalizada (máx 300 caracteres)
+        # Respeta rate limiting automáticamente
+        # Trackea estado de entrega
+    
+    async def send_message(self, account_id: str, chat_id: str, message: str):
+        # Enviar mensajes a conexiones establecidas
+        # Manejo automático de errores y reintentos
+        
+    async def search_profiles(self, account_id: str, keywords: List[str], filters: Dict):
+        # Búsqueda avanzada de perfiles con filtros
+        # Soporte para Sales Navigator y LinkedIn básico
 ```
 
-### **Características de Automatización:**
-- ✅ **Solicitudes de conexión** con mensajes personalizados
-- ✅ **Secuencias de seguimiento** basadas en patrones de respuesta
-- ✅ **Rate limiting** para cumplir políticas de LinkedIn
-- ✅ **Seguimiento de rendimiento** con analíticas detalladas
-- ✅ **Gestión de cuentas** para múltiples perfiles LinkedIn
+### **Sistema de Detección de Conexiones (TRIPLE DETECCIÓN):**
+
+#### **1. ✅ Webhook Primary Method (`users.new_relation`)**
+```python
+# En api/webhooks.py
+async def process_new_relation_event(payload: Dict[str, Any]):
+    """
+    Procesa webhook 'users.new_relation' de Unipile
+    - Detecta TODAS las conexiones nuevas establecidas
+    - Hasta 8 horas de delay pero muy confiable
+    - Actualiza métricas de campaña automáticamente
+    """
+    user_provider_id = payload.get("user_provider_id")
+    user_full_name = payload.get("user_full_name")
+    
+    # Busca target en campañas activas
+    target = await find_target_by_linkedin_id(user_provider_id)
+    if target:
+        await update_target_connection_established(target["id"])
+        await increment_campaign_connections_count(target["campaign_id"])
+```
+
+#### **2. ✅ Real-time Method (Para invitaciones con mensaje)**
+```python
+# En api/webhooks.py  
+async def process_new_message_event(payload: Dict[str, Any]):
+    """
+    Detecta aceptaciones cuando invitación incluía mensaje
+    - Real-time detection (inmediato)
+    - Usa webhook 'messaging.new_message'
+    - Primer mensaje = invitación aceptada
+    """
+```
+
+#### **3. ✅ Periodic Check Backup Method**
+```python
+# En integrations/unipile_client.py
+async def check_new_connections_periodic(self, account_id: str, last_check: datetime = None):
+    """
+    Método backup cuando webhooks fallan
+    - Revisa lista de relations periódicamente
+    - Detecta cambios desde último check
+    - Ejecuta cada 2-4 horas con intervalos random
+    """
+    
+async def check_invitation_status_changes(self, account_id: str):
+    """
+    Verifica cambios en estado de invitaciones enviadas
+    - Detecta aceptaciones/rechazos
+    - Backup para casos edge de webhooks
+    """
+```
+
+### **Características de Automatización Avanzadas:**
+- ✅ **Triple detección conexiones** (webhook + real-time + periodic backup)
+- ✅ **Rate limiting inteligente** según documentación Unipile:
+  - 80-100 invitaciones/día (200/semana máx)
+  - 100 profile visits/día
+  - 1000 search results/día (2500 con Sales Navigator)
+- ✅ **Gestión de webhooks robusta** con processing en background
+- ✅ **Error recovery automático** con métodos backup
+- ✅ **Métricas completas**: reply_count, accepted_count, connections_count
+- ✅ **Soporte Sales Navigator y LinkedIn básico**
+- ✅ **Secuencias de follow-up** (preparado para futuras implementaciones)
 
 ### **Flujo de Campaña:**
 ```
@@ -513,8 +578,54 @@ cp .env.example .env
 # 4. Configurar base de datos Supabase
 # Ejecutar SUPABASE_DATABASE_SETUP.sql en Supabase SQL Editor
 
-# 5. Iniciar servidor de desarrollo
-uvicorn api.api:app --reload --host 0.0.0.0 --port 8000
+# 5. Iniciar servidor con main.py mejorado (RECOMENDADO)
+python main.py
+# O alternativamente con uvicorn directamente:
+# uvicorn api.api:app --reload --host 0.0.0.0 --port 8000
+```
+
+### **✅ Mejoras en `main.py` (Implementadas Recientemente):**
+```python
+# main.py ahora incluye verificación completa de environment
+def check_environment():
+    """Verificar variables requeridas y opcionales"""
+    
+    # Variables críticas (fallan startup si faltan)
+    required_vars = [
+        'SUPABASE_URL', 'SUPABASE_KEY', 
+        'GEMINI_API_KEY', 'JWT_SECRET_KEY'
+    ]
+    
+    # Variables opcionales (solo advertencias)
+    optional_vars = [
+        'UNIPILE_API_KEY',      # LinkedIn automation
+        'UNIPILE_DSN',          # Unipile configuration  
+        'STRIPE_SECRET_KEY',    # Payments
+        'STRIPE_WEBHOOK_SECRET' # Stripe webhooks
+    ]
+    
+    # Warnings inteligentes por feature:
+    if 'UNIPILE_API_KEY' missing:
+        logger.warning("⚠️ LinkedIn automation disabled")
+    if 'STRIPE_SECRET_KEY' missing:
+        logger.warning("⚠️ Stripe payments disabled")
+```
+
+### **Diagnósticos de Startup Mejorados:**
+```bash
+# Output ejemplo cuando ejecutas python main.py:
+🚀 Starting 0Bullshit Chat Backend...
+✅ All critical dependencies are available
+⚠️ Optional environment variables not set: UNIPILE_API_KEY, STRIPE_SECRET_KEY
+⚠️ Some features may be disabled:
+⚠️   - LinkedIn automation and outreach campaigns
+⚠️   - Stripe payments and subscriptions
+🌐 Server configuration:
+   Host: 0.0.0.0
+   Port: 8000
+   Debug: False
+   Environment: production
+🎯 Starting server...
 ```
 
 ### **Testing:**
@@ -621,9 +732,15 @@ GET /api/analytics/platform
 
 ## ⚠️ **ISSUES CONOCIDOS Y TODOS**
 
+### **✅ Issues Recientemente Resueltos:**
+1. **❌ DatabaseManager import error**: ~~CRÍTICO~~ → ✅ **RESUELTO** - Todos los imports corregidos
+2. **❌ Detección incompleta de conexiones LinkedIn**: ~~ALTA~~ → ✅ **RESUELTO** - Triple detección implementada
+3. **❌ Falta de environment variable validation**: ~~MEDIA~~ → ✅ **RESUELTO** - main.py mejorado
+4. **❌ Webhook backup methods**: ~~ALTA~~ → ✅ **RESUELTO** - Periodic check implementado
+
 ### **Issues Inmediatos a Abordar:**
 1. **Integración servicio email**: Reset de contraseña actualmente usa solo Supabase Auth
-2. **Implementación rate limiting**: Necesita Redis para rate limiting distribuido
+2. **Implementación rate limiting**: Necesita Redis para rate limiting distribuido  
 3. **Procesamiento background jobs**: Considerar Celery para tareas pesadas
 4. **Logging comprehensivo**: Implementar structured logging con correlation IDs
 5. **Documentación API**: Auto-generar docs OpenAPI para equipo frontend
@@ -738,6 +855,14 @@ git push origin rollback-hotfix
 
 ## 💡 **NOTAS FINALES**
 
+### **✅ Mejoras Más Recientes (Enero 2025):**
+- 🚀 **Sistema de triple detección LinkedIn**: Webhook + real-time + periodic backup
+- 🔧 **Error crítico DatabaseManager resuelto**: Deploy blocker eliminado
+- ⚡ **Environment validation mejorada**: Diagnósticos startup inteligentes
+- 🛡️ **Robustez mejorada**: Backup methods para casos edge de webhooks
+- 📊 **Métricas completas**: Tracking completo de connections_count
+- 🎯 **Compliance Unipile**: Rate limiting según documentación oficial
+
 ### **Fortalezas de la Plataforma:**
 - ✅ **Fundación sólida**: Listo para producción con manejo errores apropiado
 - ✅ **Arquitectura escalable**: Preparado para crecimiento y adiciones características
@@ -764,5 +889,5 @@ git push origin rollback-hotfix
 ---
 
 *Documento creado por Equipo Backend para Incorporación CTO*  
-*Última actualización: Enero 2025*  
-*Versión: 1.0.0*
+*Última actualización: 23 Enero 2025*  
+*Versión: 1.1.0 - Actualizado con mejoras Unipile y fixes críticos*
