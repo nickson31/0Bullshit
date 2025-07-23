@@ -1,4 +1,4 @@
-# 🚀 **GUÍA DE INCORPORACIÓN CTO BACKEND**
+# 🚀 **GUÍA DE INCORPORACIÓN PARA HENRY**
 ### *Guía completa de arquitectura e implementación del backend de 0Bullshit*
 
 ---
