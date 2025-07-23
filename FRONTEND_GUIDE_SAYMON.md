@@ -502,6 +502,84 @@ const handleSubscription = async (plan: string) => {
 
 ---
 
+## 🏢 **COMPANIES SEARCH**
+
+### **Company Data Structure**
+```typescript
+interface Company {
+  id: string;
+  nombre: string;
+  descripcion_corta?: string;
+  web_empresa?: string;
+  sector_categorias?: string;
+  service_category?: string;
+  startup_relevance_score?: string;
+  correo?: string;
+  telefono?: string;
+  ubicacion_general?: string;
+  keywords_generales?: string;
+  keywords_especificas?: string;
+  created_at: string;
+}
+
+interface CompanySearchRequest {
+  problem_context: string;
+  categories?: string[];
+  limit?: number; // Default: 10, Max: 50
+}
+
+interface CompanySearchResults {
+  results: Company[];
+  total_found: number;
+  credits_used: number;
+  query_params: object;
+}
+```
+
+### **Companies Search Endpoints**
+```typescript
+// POST /api/search/companies - Search for B2B service companies
+const searchCompanies = async (searchParams: CompanySearchRequest) => {
+  const response = await makeAuthenticatedRequest('/api/search/companies', {
+    method: 'POST',
+    body: JSON.stringify(searchParams),
+  });
+  
+  return await response.json() as CompanySearchResults;
+};
+
+// Example usage:
+const searchForMarketingCompanies = async () => {
+  const results = await searchCompanies({
+    problem_context: "Need help with digital marketing and social media management for startup",
+    categories: ["marketing", "digital marketing", "social media"],
+    limit: 20
+  });
+  
+  console.log(`Found ${results.total_found} companies`);
+  results.results.forEach(company => {
+    console.log(`${company.nombre} - ${company.descripcion_corta}`);
+  });
+};
+```
+
+### **Integration with Chat System**
+The companies search is also integrated into the chat system. When users ask for help with specific business services, the AI will automatically search for relevant companies and include them in the chat response.
+
+```typescript
+// Companies search is triggered automatically by the AI when:
+// - User asks for business services (legal, marketing, development, etc.)
+// - AI detects need for external service providers
+// - User explicitly requests company recommendations
+
+// Example chat messages that trigger companies search:
+// "I need help with legal services for my startup"
+// "Can you recommend marketing agencies?"
+// "Where can I find developers for my project?"
+```
+
+---
+
 ## 📊 **ANALYTICS**
 
 ### **Analytics Endpoints**
