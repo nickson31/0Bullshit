@@ -2,7 +2,7 @@ import os
 import json
 from typing import List, Optional, Dict, Any
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client, Client
 from models.schemas import (
     Project, ProjectCreate, ProjectData, ChatResponse, 
