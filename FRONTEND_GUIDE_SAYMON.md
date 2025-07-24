@@ -324,7 +324,7 @@ const sendMessage = async (message: string, conversationId: string, projectId?: 
   return await response.json();
 };
 
-// Enhanced Chat Response Format (Updated January 2025)
+// Enhanced Chat Response Format (Updated July 2025)
 interface ChatResponse {
   response: string;
   conversation_id: string;
@@ -338,7 +338,7 @@ interface ChatResponse {
 }
 ```
 
-### **✅ New Chat Features (January 2025)**
+### **✅ New Chat Features (July 2025)**
 
 #### **1. Automatic Language Detection**
 The chat system now automatically detects the user's language and responds accordingly:
@@ -1283,5 +1283,5 @@ Good luck with the frontend development! 🚀
 ---
 
 *Document created for Frontend Integration*  
-*Last updated: January 2025*  
-*Version: 1.0.0*
+*Last updated: July 2025*  
+*Version: 1.1.0 - Updated with language detection and anti-spam features*

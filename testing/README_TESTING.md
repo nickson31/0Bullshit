@@ -562,5 +562,5 @@ python -m pytest -v 2>&1 | tee testing_results.log
 ---
 
 *Documentación de Testing creada para validación completa del backend*  
-*Última actualización: Enero 2025*  
+*Última actualización: Julio 2025*  
 *Versión: 1.0.0 - Testing Suite Completa*
