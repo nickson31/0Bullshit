@@ -323,6 +323,82 @@ const sendMessage = async (message: string, conversationId: string, projectId?: 
   
   return await response.json();
 };
+
+// Enhanced Chat Response Format (Updated January 2025)
+interface ChatResponse {
+  response: string;
+  conversation_id: string;
+  ai_extractions?: object;
+  upsell_opportunity?: object;
+  credits_used: number;
+  action_taken: string;
+  language_detected: 'spanish' | 'english' | 'other'; // NEW: Language detection
+  anti_spam_triggered: boolean; // NEW: Anti-spam detection
+  spam_score?: number; // NEW: Spam confidence score (if applicable)
+}
+```
+
+### **✅ New Chat Features (January 2025)**
+
+#### **1. Automatic Language Detection**
+The chat system now automatically detects the user's language and responds accordingly:
+
+```typescript
+// Language detection is automatic - no action needed from frontend
+// The AI will respond in the detected language:
+// - Spanish input → Spanish response
+// - English input → English response  
+// - Other languages → English response (default)
+
+// Example response with language detection:
+{
+  "response": "Perfecto, he encontrado varios inversores...", // Spanish response
+  "conversation_id": "uuid",
+  "language_detected": "spanish",
+  "anti_spam_triggered": false,
+  "credits_used": 10
+}
+```
+
+#### **2. Intelligent Anti-Spam System**
+The system detects spam/bullshit and responds with a professional but firm tone:
+
+```typescript
+// Anti-spam triggers automatically for:
+// - Random/nonsensical content
+// - Offensive or inappropriate messages
+// - Attempts to "hack" or break the AI
+// - Questions completely unrelated to startups/business
+
+// Example anti-spam response:
+{
+  "response": "I'm designed to help serious entrepreneurs with fundraising. Please ask legitimate business questions.",
+  "conversation_id": "uuid", 
+  "anti_spam_triggered": true,
+  "spam_score": 85,
+  "credits_used": 0 // No credits charged for spam
+}
+```
+
+#### **3. Enhanced Error Handling**
+```typescript
+// Handle new response fields in your chat component:
+const handleChatResponse = (response: ChatResponse) => {
+  // Check for anti-spam
+  if (response.anti_spam_triggered) {
+    // Show warning UI or different styling for anti-spam responses
+    showAntiSpamWarning(response.spam_score);
+  }
+  
+  // Handle language detection
+  if (response.language_detected !== 'english') {
+    // Update UI language preferences or show language indicator
+    updateLanguageIndicator(response.language_detected);
+  }
+  
+  // Display the message normally
+  displayMessage(response.response);
+};
 ```
 
 ---

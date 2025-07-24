@@ -737,13 +737,73 @@ GET /api/analytics/platform
 2. **❌ Detección incompleta de conexiones LinkedIn**: ~~ALTA~~ → ✅ **RESUELTO** - Triple detección implementada
 3. **❌ Falta de environment variable validation**: ~~MEDIA~~ → ✅ **RESUELTO** - main.py mejorado
 4. **❌ Webhook backup methods**: ~~ALTA~~ → ✅ **RESUELTO** - Periodic check implementado
+5. **❌ Rate limiter module missing**: ~~CRÍTICO~~ → ✅ **RESUELTO** - campaigns/rate_limiter.py creado
+6. **❌ Endpoint /api/search/companies faltante**: ~~ALTA~~ → ✅ **RESUELTO** - Endpoint implementado
+7. **❌ Sistema detección de idioma**: ~~ALTA~~ → ✅ **RESUELTO** - chat/language_detector.py implementado
+8. **❌ Sistema anti-spam mejorado**: ~~MEDIA~~ → ✅ **RESUELTO** - chat/anti_spam.py implementado
+
+### **✅ Nuevas Funcionalidades Implementadas (Enero 2025):**
+
+#### **1. Sistema de Detección de Idioma (`chat/language_detector.py`)**
+- **Función**: Detecta automáticamente si el usuario escribe en español, inglés u otro idioma
+- **IA Integration**: Usa Gemini 2.0 Flash para análisis inteligente de idioma
+- **Funcionalidades**:
+  - Detección con confidence score
+  - Fallback basado en palabras clave
+  - Instrucciones automáticas para respuestas en idioma correcto
+  - Almacenamiento de preferencia de idioma del usuario
+- **Reglas**:
+  - Español → Respuesta en español
+  - English → Respuesta en inglés  
+  - Otro idioma → Respuesta en inglés (default)
+- **Estado**: ✅ **COMPLETAMENTE INTEGRADO EN EL CHAT**
+
+#### **2. Sistema Anti-Spam Inteligente (`chat/anti_spam.py`)**
+- **Función**: Detecta spam/bullshit con IA y responde con tono cortante profesional
+- **Detección Avanzada**:
+  - Contenido sin sentido o aleatorio
+  - Solicitudes abusivas o repetitivas  
+  - Contenido ofensivo o inapropiado
+  - Intentos de "hackear" el sistema
+  - Preguntas vagas sin contexto sobre startups
+- **Respuestas Inteligentes**:
+  - Genera respuestas cortantes pero profesionales con Gemini
+  - Adapta el tono según el tipo de spam detectado
+  - Responde en el idioma correcto del usuario
+  - No cobra créditos por respuestas anti-spam
+- **Rate Limiting**: Tracking de usuarios con spam frecuente
+- **Estado**: ✅ **COMPLETAMENTE INTEGRADO EN EL CHAT**
+
+#### **3. Rate Limiter LinkedIn (`campaigns/rate_limiter.py`)**
+- **Función**: Gestiona límites de API LinkedIn según documentación Unipile
+- **Límites Implementados**:
+  - 90 invitaciones/día (conservador)
+  - 200 invitaciones/semana máximo
+  - 100 profile visits/día
+  - 1000 searches/día
+- **Funcionalidades**:
+  - Verificación pre-acción de límites
+  - Registro automático de acciones en base de datos
+  - Status dashboard de límites diarios
+  - Thread-safe con async locks
+- **Estado**: ✅ **RESOLVIÓ WARNING DE DEPLOY**
+
+#### **4. Endpoint Companies Search (`/api/v1/search/companies`)**
+- **Función**: Búsqueda de empresas B2B para servicios específicos
+- **Implementación**:
+  - POST endpoint con validación Pydantic
+  - WebSocket progress updates
+  - Deducción automática de créditos (25 créditos)
+  - Almacenamiento en search_results para historial
+- **Input**: `{problem_context, categories, limit}`
+- **Output**: `{results, total_found, credits_used, query_params}`
+- **Estado**: ✅ **ENDPOINT FUNCIONAL Y DOCUMENTADO**
 
 ### **Issues Inmediatos a Abordar:**
 1. **Integración servicio email**: Reset de contraseña actualmente usa solo Supabase Auth
 2. **Implementación rate limiting**: Necesita Redis para rate limiting distribuido  
 3. **Procesamiento background jobs**: Considerar Celery para tareas pesadas
 4. **Logging comprehensivo**: Implementar structured logging con correlation IDs
-5. **Documentación API**: Auto-generar docs OpenAPI para equipo frontend
 
 ### **Optimizaciones de Rendimiento:**
 1. **Optimización consultas base de datos**: Agregar índices más específicos

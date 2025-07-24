@@ -22,6 +22,8 @@ from investors.investors import investor_search_engine
 from chat.upsell_system import upsell_system
 from chat.welcome_system import welcome_system
 from campaigns.message_generator import message_personalizer
+from chat.language_detector import language_detector
+from chat.anti_spam import anti_spam_system
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +86,12 @@ class SearchRequest(BaseModel):
     search_type: str = "hybrid"  # hybrid, angels, funds
     limit: int = 15
 
+# Nuevo modelo para búsqueda de companies
+class CompanySearchRequest(BaseModel):
+    problem_context: str
+    categories: Optional[List[str]] = []
+    limit: int = 10
+
 # ==========================================
 # WEBSOCKET MANAGER
 # ==========================================
@@ -136,6 +144,49 @@ class EnhancedChatSystem:
             if not user_data:
                 raise HTTPException(status_code=404, detail="User not found")
             
+            # 1. DETECCIÓN DE IDIOMA (NUEVA FUNCIONALIDAD)
+            language_info = await language_detector.detect_language(message)
+            user_data["detected_language"] = language_info["language"]
+            user_data["response_language"] = language_info["response_language"]
+            
+            # Guardar preferencia de idioma del usuario en base de datos
+            await self._save_user_language_preference(user_id, language_info)
+            
+            # 2. ANÁLISIS ANTI-SPAM (NUEVA FUNCIONALIDAD)
+            conversation_context = ""
+            if conversation_id:
+                conversation_context = await self._get_conversation_context(conversation_id)
+            
+            spam_analysis = await anti_spam_system.analyze_spam(
+                message, user_data, conversation_context
+            )
+            
+            # Si es spam, responder inmediatamente con tono cortante
+            if spam_analysis["is_spam"]:
+                # Registrar intento de spam
+                anti_spam_system.record_spam_attempt(str(user_id))
+                
+                # Crear conversación si no existe
+                if not conversation_id:
+                    conversation_id = await self._create_conversation(user_id, project_id)
+                
+                # Guardar mensaje de spam y respuesta
+                await self._save_message(conversation_id, "user", message)
+                await self._save_message(
+                    conversation_id, 
+                    "assistant", 
+                    spam_analysis["response"],
+                    {"spam_detection": spam_analysis}
+                )
+                
+                return {
+                    "response": spam_analysis["response"],
+                    "conversation_id": conversation_id,
+                    "anti_spam_triggered": True,
+                    "spam_score": spam_analysis["spam_score"],
+                    "credits_used": 0  # No cobrar por spam
+                }
+            
             # Manejar onboarding si es necesario
             onboarding_response = await self._handle_onboarding(user_id, user_data, message)
             if onboarding_response:
@@ -146,15 +197,19 @@ class EnhancedChatSystem:
                 conversation_id = await self._create_conversation(user_id, project_id)
             
             # Obtener contexto de la conversación
-            conversation_context = await self._get_conversation_context(conversation_id)
+            if not conversation_context:
+                conversation_context = await self._get_conversation_context(conversation_id)
             
-            # Procesar mensaje con AI (Judge, Mentor, Librarian)
+            # Procesar mensaje con AI (Judge, Mentor, Librarian) CON DETECCIÓN DE IDIOMA
             ai_response = await self._process_with_ai_agents(
-                user_id, message, conversation_context, user_data, project_id
+                user_id, message, conversation_context, user_data, project_id, language_info
             )
             
             # Guardar mensaje del usuario
-            await self._save_message(conversation_id, "user", message)
+            await self._save_message(conversation_id, "user", message, {
+                "language_detected": language_info,
+                "spam_analysis": spam_analysis
+            })
             
             # Analizar oportunidad de upsell
             upsell_opportunity = await upsell_system.analyze_upsell_opportunity(
@@ -174,8 +229,11 @@ class EnhancedChatSystem:
                 conversation_id, 
                 "assistant", 
                 final_response,
-                ai_response.get("extractions"),
-                upsell_opportunity
+                {
+                    **ai_response.get("extractions", {}),
+                    "language_info": language_info,
+                    "upsell_opportunity": upsell_opportunity
+                }
             )
             
             # Deducir créditos si es necesario
@@ -188,7 +246,9 @@ class EnhancedChatSystem:
                 "ai_extractions": ai_response.get("extractions"),
                 "upsell_opportunity": upsell_opportunity,
                 "credits_used": ai_response.get("credits_used", 0),
-                "action_taken": ai_response.get("action")
+                "action_taken": ai_response.get("action"),
+                "language_detected": language_info["language"],
+                "anti_spam_triggered": False
             }
             
         except Exception as e:
@@ -227,19 +287,25 @@ class EnhancedChatSystem:
         message: str, 
         conversation_context: str, 
         user_data: Dict,
-        project_id: Optional[str]
+        project_id: Optional[str],
+        language_info: Dict
     ) -> Dict:
         """
-        Procesa el mensaje con los agentes AI (Judge, Mentor, Librarian)
+        Procesa el mensaje con los agentes AI (Judge, Mentor, Librarian) CON SOPORTE DE IDIOMA
         """
         try:
             # Importar sistemas de chat
             from chat.judge import judge_system
             from chat.chat import ChatSystem
             
-            # Usar el Judge para determinar la acción
+            # Obtener instrucciones de idioma
+            language_instructions = await language_detector.get_response_instructions(
+                language_info["response_language"]
+            )
+            
+            # Usar el Judge para determinar la acción CON CONTEXTO DE IDIOMA
             judge_decision = await judge_system.analyze_user_intent(
-                message, conversation_context, user_data, project_id
+                message, conversation_context, user_data, project_id, language_info
             )
             
             credits_used = 0
@@ -248,8 +314,11 @@ class EnhancedChatSystem:
             if judge_decision["action"] == "search_investors":
                 # Buscar inversores
                 if not project_id:
+                    error_msg = ("Necesito que me proporciones más información sobre tu proyecto antes de buscar inversores. ¿Podrías contarme sobre tu startup?" 
+                                if language_info["response_language"] == "spanish" 
+                                else "I need you to provide more information about your project before searching for investors. Could you tell me about your startup?")
                     return {
-                        "response": "Necesito que me proporciones más información sobre tu proyecto antes de buscar inversores. ¿Podrías contarme sobre tu startup?",
+                        "response": error_msg,
                         "action": "request_project_info",
                         "credits_used": 0
                     }
@@ -257,8 +326,11 @@ class EnhancedChatSystem:
                 # Obtener datos del proyecto
                 project_data = await self._get_project_data(project_id)
                 if not project_data:
+                    error_msg = ("No encontré información del proyecto. ¿Podrías crear un proyecto primero?" 
+                                if language_info["response_language"] == "spanish" 
+                                else "I couldn't find project information. Could you create a project first?")
                     return {
-                        "response": "No encontré información del proyecto. ¿Podrías crear un proyecto primero?",
+                        "response": error_msg,
                         "action": "request_project_creation",
                         "credits_used": 0
                     }
@@ -271,8 +343,10 @@ class EnhancedChatSystem:
                     limit=15
                 )
                 
-                # Generar respuesta con resultados
-                response = await self._format_search_results(search_results, metadata)
+                # Generar respuesta con resultados EN EL IDIOMA CORRECTO
+                response = await self._format_search_results(
+                    search_results, metadata, language_info["response_language"]
+                )
                 credits_used = metadata.get("credits_used", 50)
                 extractions = {
                     "search_results": {
@@ -281,21 +355,43 @@ class EnhancedChatSystem:
                         "average_relevance": metadata.get("average_relevance", 0)
                     }
                 }
+            
+            elif judge_decision["action"] == "search_companies":
+                # Buscar companies
+                problem_context = judge_decision.get("extracted_data", {}).get("problem_context", message)
+                categories = judge_decision.get("extracted_data", {}).get("categories", [])
+                
+                companies = await db.search_companies(
+                    problem_context=problem_context,
+                    categories=categories,
+                    limit=10
+                )
+                
+                response = await self._format_company_results(
+                    companies, language_info["response_language"]
+                )
+                credits_used = 25
                 
             elif judge_decision["action"] == "provide_advice":
-                # Usar Mentor Y-Combinator
+                # Usar Mentor Y-Combinator CON INSTRUCCIONES DE IDIOMA
                 chat_system = ChatSystem()
-                response = await chat_system.get_mentor_advice(message, conversation_context, user_data)
+                response = await chat_system.get_mentor_advice(
+                    message, conversation_context, user_data, language_instructions
+                )
                 
             elif judge_decision["action"] == "answer_question":
-                # Usar Librarian
+                # Usar Librarian CON INSTRUCCIONES DE IDIOMA
                 chat_system = ChatSystem()
-                response = await chat_system.get_librarian_response(message, conversation_context)
+                response = await chat_system.get_librarian_response(
+                    message, conversation_context, language_instructions
+                )
                 
             else:
-                # Respuesta general del chat
+                # Respuesta general del chat CON INSTRUCCIONES DE IDIOMA
                 chat_system = ChatSystem()
-                response = await chat_system.generate_response(message, conversation_context, user_data)
+                response = await chat_system.generate_response(
+                    message, conversation_context, user_data, language_instructions
+                )
             
             return {
                 "response": response,
@@ -303,14 +399,18 @@ class EnhancedChatSystem:
                 "credits_used": credits_used,
                 "extractions": {
                     "judge_decision": judge_decision,
+                    "language_info": language_info,
                     **extractions
                 }
             }
             
         except Exception as e:
             logger.error(f"Error processing with AI agents: {e}")
+            error_msg = ("Lo siento, hubo un error procesando tu mensaje. ¿Podrías intentar de nuevo?" 
+                        if language_info.get("response_language") == "spanish" 
+                        else "Sorry, there was an error processing your message. Could you try again?")
             return {
-                "response": "Lo siento, hubo un error procesando tu mensaje. ¿Podrías intentar de nuevo?",
+                "response": error_msg,
                 "action": "error",
                 "credits_used": 0
             }
@@ -405,31 +505,105 @@ class EnhancedChatSystem:
         except Exception as e:
             logger.error(f"Error saving message: {e}")
     
-    async def _format_search_results(self, results: List[Dict], metadata: Dict) -> str:
-        """Formatea los resultados de búsqueda para mostrar al usuario"""
+    async def _save_user_language_preference(self, user_id: UUID, language_info: Dict):
+        """Guardar preferencia de idioma del usuario"""
+        try:
+            db.supabase.table("users")\
+                .update({
+                    "preferred_language": language_info["language"],
+                    "language_confidence": language_info.get("confidence", 0),
+                    "updated_at": datetime.now().isoformat()
+                })\
+                .eq("id", str(user_id))\
+                .execute()
+        except Exception as e:
+            logger.error(f"Error saving language preference: {e}")
+    
+    async def _format_search_results(self, results: List[Dict], metadata: Dict, language: str) -> str:
+        """Formatea los resultados de búsqueda EN EL IDIOMA CORRECTO"""
         try:
             if not results:
-                return "No encontré inversores que coincidan con tu perfil en este momento. ¿Podrías proporcionar más detalles sobre tu proyecto?"
+                return ("No encontré inversores que coincidan con tu perfil en este momento. ¿Podrías proporcionar más detalles sobre tu proyecto?" 
+                       if language == "spanish" 
+                       else "I couldn't find investors matching your profile right now. Could you provide more details about your project?")
             
-            response = f"Perfecto, he encontrado {len(results)} inversores especializados que coinciden con tu perfil:\n\n**TOP MATCHES:**\n"
+            if language == "spanish":
+                response = f"Perfecto, he encontrado {len(results)} inversores especializados que coinciden con tu perfil:\n\n**TOP MATCHES:**\n"
+                
+                for i, investor in enumerate(results[:3], 1):
+                    response += f"{i}. **{investor.get('name', 'Inversor')}**"
+                    if investor.get('company'):
+                        response += f" - {investor['company']}"
+                    response += f"\n   - Especialización: {investor.get('investment_focus', 'General')}"
+                    if investor.get('stage_preference'):
+                        response += f"\n   - Etapa: {investor['stage_preference']}"
+                    response += f"\n   - Score de relevancia: {investor.get('relevance_score', 0):.1f}%\n\n"
+                
+                response += "**NEXT STEPS:**\n¿Quieres que prepare una campaña de outreach personalizada para contactar a estos inversores automáticamente por LinkedIn?"
             
-            # Mostrar top 3 resultados
-            for i, investor in enumerate(results[:3], 1):
-                response += f"{i}. **{investor.get('name', 'Inversor')}**"
-                if investor.get('company'):
-                    response += f" - {investor['company']}"
-                response += f"\n   - Especialización: {investor.get('investment_focus', 'General')}"
-                if investor.get('stage_preference'):
-                    response += f"\n   - Etapa: {investor['stage_preference']}"
-                response += f"\n   - Score de relevancia: {investor.get('relevance_score', 0):.1f}%\n\n"
-            
-            response += "**NEXT STEPS:**\n¿Quieres que prepare una campaña de outreach personalizada para contactar a estos inversores automáticamente por LinkedIn?"
+            else:  # English
+                response = f"Perfect, I found {len(results)} specialized investors matching your profile:\n\n**TOP MATCHES:**\n"
+                
+                for i, investor in enumerate(results[:3], 1):
+                    response += f"{i}. **{investor.get('name', 'Investor')}**"
+                    if investor.get('company'):
+                        response += f" - {investor['company']}"
+                    response += f"\n   - Focus: {investor.get('investment_focus', 'General')}"
+                    if investor.get('stage_preference'):
+                        response += f"\n   - Stage: {investor['stage_preference']}"
+                    response += f"\n   - Relevance score: {investor.get('relevance_score', 0):.1f}%\n\n"
+                
+                response += "**NEXT STEPS:**\nWould you like me to prepare a personalized outreach campaign to contact these investors automatically via LinkedIn?"
             
             return response
             
         except Exception as e:
             logger.error(f"Error formatting search results: {e}")
-            return "Encontré varios inversores interesantes. ¿Te gustaría ver los detalles?"
+            return ("Encontré varios inversores interesantes. ¿Te gustaría ver los detalles?" 
+                   if language == "spanish" 
+                   else "I found several interesting investors. Would you like to see the details?")
+    
+    async def _format_company_results(self, companies: List, language: str) -> str:
+        """Formatea los resultados de búsqueda de companies EN EL IDIOMA CORRECTO"""
+        try:
+            if not companies:
+                return ("No encontré empresas que coincidan con tu consulta. ¿Podrías ser más específico sobre el tipo de servicio que necesitas?" 
+                       if language == "spanish" 
+                       else "I couldn't find companies matching your query. Could you be more specific about the type of service you need?")
+            
+            if language == "spanish":
+                response = f"He encontrado {len(companies)} empresas especializadas que pueden ayudarte:\n\n**TOP COMPANIES:**\n"
+                
+                for i, company in enumerate(companies[:3], 1):
+                    response += f"{i}. **{company.nombre}**\n"
+                    if hasattr(company, 'descripcion_corta') and company.descripcion_corta:
+                        response += f"   - {company.descripcion_corta}\n"
+                    if hasattr(company, 'web_empresa') and company.web_empresa:
+                        response += f"   - Web: {company.web_empresa}\n"
+                    response += "\n"
+                
+                response += "¿Te gustaría que busque más empresas similares o necesitas información específica sobre alguna de estas?"
+            
+            else:  # English
+                response = f"I found {len(companies)} specialized companies that can help you:\n\n**TOP COMPANIES:**\n"
+                
+                for i, company in enumerate(companies[:3], 1):
+                    response += f"{i}. **{company.nombre}**\n"
+                    if hasattr(company, 'descripcion_corta') and company.descripcion_corta:
+                        response += f"   - {company.descripcion_corta}\n"
+                    if hasattr(company, 'web_empresa') and company.web_empresa:
+                        response += f"   - Website: {company.web_empresa}\n"
+                    response += "\n"
+                
+                response += "Would you like me to search for more similar companies or do you need specific information about any of these?"
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error formatting company results: {e}")
+            return ("Encontré varias empresas interesantes. ¿Te gustaría ver más detalles?" 
+                   if language == "spanish" 
+                   else "I found several interesting companies. Would you like to see more details?")
 
 # Instancia global del chat mejorado
 enhanced_chat = EnhancedChatSystem()
@@ -644,6 +818,98 @@ async def search_investors(
     except Exception as e:
         logger.error(f"Error searching investors: {e}")
         raise HTTPException(status_code=500, detail="Error performing search")
+
+@app.post("/api/v1/search/companies")
+async def search_companies(
+    search_data: CompanySearchRequest,
+    current_user: UUID = Depends(get_current_user)
+):
+    """
+    Busca empresas B2B para servicios específicos
+    """
+    try:
+        # Verificar créditos del usuario
+        user_query = db.supabase.table("users")\
+            .select("credits, plan")\
+            .eq("id", str(current_user))\
+            .execute()
+        
+        if not user_query.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_credits = user_query.data[0].get("credits", 0)
+        credits_cost = 25  # Costo de búsqueda de companies
+        
+        if user_credits < credits_cost:
+            raise HTTPException(status_code=402, detail="Insufficient credits")
+        
+        # Callback para WebSocket updates
+        async def websocket_callback(progress_data):
+            await manager.send_personal_message(
+                json.dumps({"type": "company_search_progress", "data": progress_data}),
+                str(current_user)
+            )
+        
+        # Enviar progreso inicial
+        if str(current_user) in manager.active_connections:
+            await websocket_callback({
+                "stage": "starting",
+                "message": "Iniciando búsqueda de empresas...",
+                "progress": 10
+            })
+        
+        # Realizar búsqueda
+        companies = await db.search_companies(
+            problem_context=search_data.problem_context,
+            categories=search_data.categories or [],
+            limit=search_data.limit
+        )
+        
+        # Enviar progreso final
+        if str(current_user) in manager.active_connections:
+            await websocket_callback({
+                "stage": "completed",
+                "message": f"Búsqueda completada. {len(companies)} empresas encontradas.",
+                "progress": 100
+            })
+        
+        # Deducir créditos
+        await db.deduct_user_credits(current_user, credits_cost)
+        
+        # Guardar resultados en search_results para historial
+        search_result_data = {
+            "id": str(uuid4()),
+            "user_id": str(current_user),
+            "search_type": "companies",
+            "query_params": {
+                "problem_context": search_data.problem_context,
+                "categories": search_data.categories,
+                "limit": search_data.limit
+            },
+            "results": [company.__dict__ for company in companies],
+            "total_found": len(companies),
+            "credits_used": credits_cost,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        db.supabase.table("search_results").insert(search_result_data).execute()
+        
+        return {
+            "results": [company.__dict__ for company in companies],
+            "total_found": len(companies),
+            "credits_used": credits_cost,
+            "query_params": {
+                "problem_context": search_data.problem_context,
+                "categories": search_data.categories,
+                "limit": search_data.limit
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error searching companies: {e}")
+        raise HTTPException(status_code=500, detail="Error performing companies search")
 
 # ==========================================
 # WEBSOCKET ENDPOINTS
